@@ -1,1 +1,20 @@
+This fold contains data for cross-species comparisons of cell types. 
 
+For Direct Comparison:
+Preprocessed matrices from Levy et al. 2021 were used, including single-cell RNA data from:
+       -Nematostella vectensis (Nvec) (Sebe-Pedros at al. Cell 2018); 
+       -Hydra vulgaris (Hvul) (Siebert et al. Science 2019);
+       -Xenia sp. (Xesp) (Hu et al. Nature 2020);
+       -Stylophora pistillata (Xesp) (Levy et al. Cell 2021.).
+We created the expression matrices of Clytia hemisphaerica using data from Chari et al. 2021.
+       -Chem_broad_cell_type_gene_FC
+       -Chem_cell_type_gene_FC
+
+For indirect comparison:
+Marker gene matrices were generated using Seurat and include the following files:
+all.markers.wide.Aceo.txt 
+all.markers.wide.Resc.txt 
+all.markers.wide.Chem.txt 
+all.markers.wide.Nvec.txt 
+all.markers.wide.Spis.txt 
+all.markers.wide.Hvul.txt
