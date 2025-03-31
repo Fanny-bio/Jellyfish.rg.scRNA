@@ -7,7 +7,7 @@ library(cowplot)
 library(clustree)
 library(metap)
 
-#Aurelia sp.
+#Load Aurelia single-cell data.
 AAU0 <- Read10X(data.dir = ".../count_AAU_0h/outs/filtered_feature_bc_matrix")
 AAU6 <- Read10X(data.dir = ".../count_AAU_6h/outs/filtered_feature_bc_matrix")
 AAU12 <- Read10X(data.dir = ".../count_AAU_12h/outs/filtered_feature_bc_matrix")
@@ -75,11 +75,10 @@ p1 <- DimPlot(regeneration.combined, reduction = "umap", group.by = "stim")
 p2 <- DimPlot(regeneration.combined, reduction = "umap", label = TRUE)
 plot_grid(p1, p2)
 
-#see prportion of each cell cluster
+#see proportion of each cell cluster
 table(regeneration.combined@meta.data$seurat_clusters, regeneration.combined@meta.data$orig.ident)
 
 #save
-
 save(".../Moon.singlecell.mt5.cellranger_v7.1.0.dim18.vst.AfterFindClusters.RData")
 
 #find marker genes of each cell cluster
