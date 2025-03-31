@@ -33,8 +33,8 @@ cds@int_colData$reducedDims$UMAP <- int.embed
 cds <- cluster_cells(cds)
 
 #replace monocle clusters with seurat
-cds@clusters$UMAP$clusters <- regeneration.combined_FCRPB@meta.data$seurat_clusters
-names(cds@clusters$UMAP$clusters) <- rownames(regeneration.combined_FCRPB@meta.data)
+cds@clusters$UMAP$clusters <- regeneration.combined@meta.data$seurat_clusters
+names(cds@clusters$UMAP$clusters) <- rownames(regeneration.combined@meta.data)
 
 #Learn graph
 cds <- learn_graph(cds, use_partition=FALSE, close_loop=FALSE)
