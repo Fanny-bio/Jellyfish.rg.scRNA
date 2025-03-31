@@ -1,4 +1,4 @@
-###Cross species comparasion using KLD caculation
+### Cross-species comparison using KLD calculation
 library(LaplacesDemon)
 library(preprocessCore)
 library(pheatmap)
@@ -6,6 +6,121 @@ library(dplyr)
 library(tidyr)
 
 setwd(".../Synteny_KLD")
+
+##ref to ref Seurat(self-correlation of reference species)
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp",
+           "Chem")
+
+refcelltype<-c("","_broad")
+for (n in 1:length(species)) {
+  for (k in 1:length(refcelltype)){
+    #px = ref cell type
+    px<-read.delim(paste0(species[n], refcelltype[k], "_cell_type_gene_FC"), header = TRUE)
+    row.names(px)<-gsub(paste0(species[n],"_"), "", row.names(px))
+    row.names(px)<-gsub("-", "_", row.names(px))
+    #py = Seurat cell type
+    py<-read.delim(paste0("all.marker.wide.", species[n],".txt"), header = TRUE)
+    row.names(py)<-py$gene_id
+    py<-py[,-which(names(py)=="gene_id")]
+    row.names(py)<-gsub(paste0(species[n],"-"), "", row.names(py))
+    row.names(py)<-gsub("-", "_", row.names(py))
+    
+    #quantile normalization
+    pxn<-normalize.quantiles(as.matrix(log2(px)))
+    dimnames(pxn)<-list(row.names(px), names(px))
+    pxn<-as.data.frame(pxn)
+    
+    pyn<-normalize.quantiles(as.matrix(py))
+    dimnames(pyn)<-list(row.names(py), names(py))
+    pyn<-as.data.frame(pyn)
+    
+    #merge 
+    pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+    row.names(pn)<-pn$Row.names
+    pn<-pn[,-which(names(pn)=="Row.names")]
+    
+    kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+    colnames(kld.matrix)=colnames(pn)
+    rownames(kld.matrix)=colnames(pn)
+    
+    #Calculation KLD for each pair
+    for (i in 1:ncol(pn)) {
+      for (j in 1:ncol(pn)) {
+        kld=KLD(pn[,i], pn[,j])
+        kld.matrix[i,j]=kld$sum.KLD.px.py
+      }
+    } 
+    
+    write.table(kld.matrix, 
+                paste0("ref-seurat.",species[n],refcelltype[k],".txt"),
+                row.names = T, quote = F, sep = "\t")
+    
+    kld.matrix.label<-kld.matrix
+    #Label 5% top
+    for (x in 1:ncol(kld.matrix.label)) {
+      co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+      co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+      for (y in 1:ncol(pxn)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co1) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+      
+      for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co2) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+    }
+    
+    #Visualisation
+    
+    if (max(kld.matrix)>=0.1) {
+      break.limit<-ceiling(7.5*max(kld.matrix))/10
+    } else if (max(kld.matrix)>=0.01){
+      break.limit<-ceiling(75*max(kld.matrix))/100
+    } else {
+      break.limit<-ceiling(750*max(kld.matrix))/1000
+    }
+    
+    heatp<-pheatmap(kld.matrix,
+                    color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                    legend = TRUE, 
+                    breaks = seq(0, break.limit, break.limit/100),
+                    scale = "none",
+                    cluster_rows = FALSE, cluster_cols = FALSE,
+                    cutree_rows = NA, treeheight_row = 0,
+                    cutree_cols = NA, treeheight_col = 0,
+                    border_color = NA,
+                    legend_labels = "Kullback-Leibler divergence",
+                    display_numbers = kld.matrix.label,
+                    number_color = "black",
+                    fontsize_number = 10,
+                    cellwidth = 12, cellheight = 12, fontsize = 10,
+                    angle_col = c("90"),
+                    width = ncol(pn)*0.25+1, height = ncol(pn)*0.25,
+                    show_colnames = TRUE,
+                    show_rownames = TRUE,
+                    gaps_row = c(ncol(pxn)),
+                    gaps_col = c(ncol(pxn)),
+                    filename = paste0("ref-seurat.",species[n],refcelltype[k],".png"))
+  }
+}
 
 ##Seurat to Seurat Aceo(indirect comparasion)
 species<-c("Hvul",
