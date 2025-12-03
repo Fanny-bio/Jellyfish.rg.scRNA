@@ -1,0 +1,133 @@
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clusterProfiler)
+
+#for Aurelia
+eggnog<-read.delim(".../Jellyfish_Aurelia_emapper.annotations", 
+                   header = FALSE, skip = 5)
+##Output of all marker genes from seurat
+DEG<-read.delim(".../Male.Moon.rg.stim.findmarker.txt, 
+                header = TRUE)
+#for Rhopilema
+eggnog<-read.delim(".../Jellyfish_edible_hic.proteins.33208.eggnog.emapper.annotations.xls", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../Edible.rg.stim.findmarker.txt, 
+                header = TRUE)
+
+DEG$Genes<-gsub("-", "_", DEG$Genes)
+DEG<-DEG[is.na(DEG$Genes)==F,]
+DEG.bk<-DEG
+
+DEG<-DEG.bk[DEG.bk$avg_log2FC > 1,]
+
+eggnog<-separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+pathways<-eggnog[,c(2,15)]
+pathways<-separate(pathways, V13, c("ko","map"), sep = ",map", remove = FALSE)
+pathways<-pathways[,c(1,3)]
+names(pathways)[1]="Genes"
+names(pathways)[2]="KEGG"
+#pathways$KEGG<-gsub("ko", "", pathways$KEGG)
+#remove blank kegg
+pathways<-subset(pathways, KEGG != "-", select = c("Genes", "KEGG"))
+
+#Format GenesKEGGpair
+GenesKEGGpair.1v1<-matrix(NA, nrow = 1, ncol = 2)
+GenesKEGGpair.1v1<-as.data.frame(GenesKEGGpair.1v1)
+names(GenesKEGGpair.1v1)[1]="Genes"
+names(GenesKEGGpair.1v1)[2]="KEGG"
+
+#format
+for (i in 1:nrow(pathways)) {
+  subtable<-pathways[i,]
+  rcnames<-list(c(strsplit(subtable$Genes[1], ',')[[1]]),c(strsplit(subtable$KEGG[1], ',')[[1]]))
+  pairtable<-matrix(data = NA, nrow = length(rcnames[[1]]), ncol = length(rcnames[[2]]), dimnames = rcnames)
+  pairtable<-as.data.frame(pairtable)
+  pairtable$Genes<-rownames(pairtable)
+  rownames(pairtable)<-1:nrow(pairtable)
+  pairtable<-as.data.frame(pairtable)
+  pairtable.new<-pairtable %>% gather(KEGG, pair, c(1:ncol(pairtable)-1))
+  pairtable.new<-pairtable.new[,c(1:2)]
+  GenesKEGGpair.1v1<-rbind(GenesKEGGpair.1v1, pairtable.new)
+}
+GenesKEGGpair.1v1<-subset(GenesKEGGpair.1v1, 
+                          is.na(GenesKEGGpair.1v1$Genes)==FALSE, 
+                          select = c("KEGG", "Genes"))
+GenesKEGGpair.1v1<-unique(GenesKEGGpair.1v1)
+rm(pairtable, pairtable.new, rcnames, subtable, pathways)
+
+
+####KEGG enrich
+KEGG.all.1<-compareCluster(Genes ~ cell.type+treatment, 
+                          data = DEG, 
+                          fun = 'enricher',
+                          TERM2GENE = GenesKEGGpair.1v1,
+                          TERM2NAME = kegg2name,
+                          pvalueCutoff = 1,
+                          pAdjustMethod = "BH",
+                          qvalueCutoff = 1,
+                          minGSSize = 1,
+                          maxGSSize = 10000)
+
+##Plot
+addline_format <- function(x,...){ 
+  gsub('_','\n',x) 
+} 
+
+kegg2ont<- read.delim(".../kegglevel.AC.txt", 
+                      sep = "\t", colClasses = "character")
+names(kegg2ont)[2]="ID"
+
+plotin<-as.data.frame(KEGG.all.1)
+View(plotin)
+plotin<-subset(plotin, is.na(Description)==FALSE)
+
+plotinsep<-separate(plotin, "GeneRatio", c("Genenumerator", "Genedenominator"),sep = "/", remove = FALSE, convert = TRUE)
+plotinsep<-separate(plotinsep, "BgRatio", c("BGnumerator", "BGdenominator"),sep = "/", remove = FALSE, convert = TRUE)
+
+plotdata<-subset(plotinsep, is.na(Description) == FALSE & p.adjust < 1)
+plotdata<-merge(plotdata, kegg2ont, by = "ID", all.x = TRUE)
+
+plotdata$ratio=plotdata$Genenumerator/plotdata$BGnumerator
+plotdata$Group=paste(plotdata$Cluster, "(", plotdata$Genedenominator, ")")
+plotdata$Description<-paste(plotdata$Description,"(", plotdata$BGnumerator, ")")
+write.table(plotdata, "DEG.KEGG.enrich.L1.txt", quote = F, row.names = F, sep = "\t")
+
+list(plotdata$Group)
+comparegroup<-c("6hVS0h","12hVS6h","18hVS12h","24hVS18h","12hVS0h","18hVS0h","24hVS0h")
+
+#For Rophilema
+celltype<-c("cell_cluster_3","cell_cluster_5","cell_cluster_2",
+            "cell_cluster_7","cell_cluster_8","cell_cluster_1",
+            "cell_cluster_4","cell_cluster_6","cell_cluster_9",
+            "cell_cluster_10","cell_cluster_11","cell_cluster_0")
+#For Aurelia
+celltype<-c("cell_cluster_0","cell_cluster_11",
+            "cell_cluster_1","cell_cluster_7","cell_cluster_5","cell_cluster_6",
+            "cell_cluster_2","cell_cluster_3","cell_cluster_8",
+            "cell_cluster_9","cell_cluster_10","cell_cluster_4")
+
+plotdata<-subset(plotdata, Genenumerator >=1)
+plotdata1<-plotdata[plotdata$ONTOLOGY !="Human Diseases",]
+plotdata1<-plotdata1[plotdata1$treatment %in% comparegroup,]
+
+a<-ggplot(subset(plotdata1, p.adjust < 0.05 & !is.na(qvalue)), aes(x = factor(treatment, levels = comparegroup), y = Description, size = ratio, colour = p.adjust))+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  scale_x_discrete(limits = comparegroup)+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 15), 
+        axis.text.x = element_text(size = 15, angle = 90), 
+        axis.text.y = element_text(size = 15),
+        legend.title = element_text(size = 15), 
+        plot.title = element_text(size = 16))+
+  facet_grid(ONTOLOGY~factor(cell.type, levels = celltype), scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 15))
+a
+
+ggsave("KEGGp1.all.0.05.png", 
+       width = 40, 
+       height = 0.3*length(unique(plotdata1[plotdata1$p.adjust < 0.05, "Description"])), 
+       units = "in", dpi = 300, limitsize = FALSE)
