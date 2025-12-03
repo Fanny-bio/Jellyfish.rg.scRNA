@@ -1,0 +1,1153 @@
+#1.3.1 for Rhopilema 
+setwd(".../Synteny_KLD/")
+library(LaplacesDemon)
+library(preprocessCore)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp")
+
+##from metacell, compare broad and sub cell type
+for (n in 1:length(species)) {
+  #px = sub cell type
+  px<-read.delim(paste0(species[n], "_cell_type_gene_FC"), header = TRUE)
+  #py = broad cell type
+  py<-read.delim(paste0(species[n], "_broad_cell_type_gene_FC"), header = TRUE)
+  
+  #quantile normalization
+  pxn<-normalize.quantiles(as.matrix(log2(px)))
+  dimnames(pxn)<-list(row.names(px), names(px))
+  pxn<-as.data.frame(pxn)
+  
+  pyn<-normalize.quantiles(as.matrix(log2(py)))
+  dimnames(pyn)<-list(row.names(py), paste0("broad.",names(py)))
+  pyn<-as.data.frame(pyn)
+  
+  #merge 
+  pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+  row.names(pn)<-pn$Row.names
+  pn<-pn[,-which(names(pn)=="Row.names")]
+  
+  kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+  colnames(kld.matrix)=colnames(pn)
+  rownames(kld.matrix)=colnames(pn)
+  
+  #Calculate KLD for each pair
+  for (i in 1:ncol(pn)) {
+    for (j in 1:ncol(pn)) {
+      kld=KLD(pn[,i], pn[,j])
+      kld.matrix[i,j]=kld$sum.KLD.px.py
+    }
+  }
+  
+  write.table(kld.matrix, 
+              paste0("broad-sub.",species[n],".txt"),
+              row.names = T, quote = F, sep = "\t")
+  
+  kld.matrix.label<-kld.matrix
+  
+  #Label 5% top
+  for (x in 1:ncol(kld.matrix.label)) {
+    co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+    co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+    for (y in 1:ncol(pxn)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co1) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+    
+    for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co2) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+  }
+  
+  #Visualisation
+  
+  if (max(kld.matrix)>=0.1) {
+    break.limit<-ceiling(7.5*max(kld.matrix))/10
+  } else if (max(kld.matrix)>=0.01){
+    break.limit<-ceiling(75*max(kld.matrix))/100
+  } else {
+    break.limit<-ceiling(750*max(kld.matrix))/1000
+  }
+  
+  heatp<-pheatmap(kld.matrix,
+                  color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                  legend = TRUE, 
+                  breaks = seq(0, break.limit, break.limit/100),
+                  scale = "none",
+                  cluster_rows = FALSE, cluster_cols = FALSE,
+                  cutree_rows = NA, treeheight_row = 0,
+                  cutree_cols = NA, treeheight_col = 0,
+                  border_color = NA,
+                  legend_labels = "Kullback-Leibler divergence",
+                  display_numbers = kld.matrix.label,
+                  number_color = "black",
+                  fontsize_number = 10,
+                  cellwidth = 12, cellheight = 12, fontsize = 10,
+                  angle_col = c("90"),
+                  width = ncol(pn)*0.25, height = ncol(pn)*0.25,
+                  show_colnames = TRUE,
+                  show_rownames = TRUE,
+                  gaps_row = c(ncol(pxn)),
+                  gaps_col = c(ncol(pxn)),
+                  filename = paste0("broad-sub.",species[n],".png"))
+}
+
+##Chem only
+##format chem science advance data
+##Calculate average FC
+
+species="Chem"
+
+{
+  metatable<-read.delim(paste0(species, ".meta.tsv"), header = TRUE)
+  exptable<-read.delim(paste0(species, ".exprMatrix.tsv"), header = TRUE)
+  
+  broad.celltype<-as.data.frame(unique(metatable$annos))
+  names(broad.celltype)<-"cell.type"
+  sub.celltype<-as.data.frame(unique(metatable$annosSub))
+  names(sub.celltype)<-"cell.type"
+  
+  metatable$cellId<-gsub("-", ".", metatable$cellId)
+  geneid<-as.data.frame(exptable$gene)
+  names(geneid)<-"gene_id"
+  broad.log2FC<-geneid
+  sub.log2FC<-geneid
+  ##broad 
+  for (i in 1:nrow(broad.celltype)) {
+    exptable.target<-exptable[,
+                              names(exptable) %in% metatable$cellId[metatable$annos == broad.celltype$cell.type[i]]]
+    exptable.other<-exptable[,
+                             names(exptable) %in% metatable$cellId[metatable$annos != broad.celltype$cell.type[i]]]
+    FC.sub<-geneid
+    FC.sub$target<-rowMeans(exptable.target)
+    FC.sub$other<-rowMeans(exptable.other)  
+    FC.sub$FC<-(FC.sub$target+1)/(FC.sub$other+1)
+    FC.sub<-FC.sub[,c("gene_id","FC")]
+    names(FC.sub)=c("gene_id", broad.celltype$cell.type[i])
+    broad.log2FC<-merge(broad.log2FC,FC.sub, by = "gene_id", all.x = TRUE)
+  }
+  
+  write.table(broad.log2FC, paste0(species, "_broad_cell_type_gene_FC"), 
+              sep = "\t", quote = FALSE, row.names = FALSE)
+  ##sub
+  for (i in 1:nrow(sub.celltype)) {
+    exptable.target<-exptable[,
+                              names(exptable) %in% metatable$cellId[metatable$annosSub == sub.celltype$cell.type[i]]]
+    exptable.other<-exptable[,
+                             names(exptable) %in% metatable$cellId[metatable$annosSub != sub.celltype$cell.type[i]]]
+    FC.sub<-geneid
+    FC.sub$target<-rowMeans(exptable.target)
+    FC.sub$other<-rowMeans(exptable.other)
+    FC.sub$FC<-(FC.sub$target+1)/(FC.sub$other+1)
+    FC.sub<-FC.sub[,c("gene_id","FC")]
+    names(FC.sub)=c("gene_id", sub.celltype$cell.type[i])
+    sub.log2FC<-merge(sub.log2FC,FC.sub, by = "gene_id", all.x = TRUE)
+  }
+  
+  write.table(sub.log2FC, paste0(species, "_cell_type_gene_FC"), 
+              sep = "\t", quote = FALSE, row.names = FALSE)
+}
+
+###Chem KLD/compare broad and sub cell type
+##log2 transformed average log2FC
+for (n in 1:length(species)){
+  #px = sub cell type
+  px<-read.delim(paste0(species[n], "_cell_type_gene_FC"), header = TRUE)
+  row.names(px)<-px$gene_id
+  px<-px[,-which(names(px)=="gene_id")]
+  px<-px[,order(names(px))]
+  #py = broad cell type
+  py<-read.delim(paste0(species[n], "_broad_cell_type_gene_FC"), header = TRUE)
+  row.names(py)<-py$gene_id
+  py<-py[,-which(names(py)=="gene_id")]
+  
+  #quantile normalization
+  pxn<-normalize.quantiles(as.matrix(log2(px)))
+  dimnames(pxn)<-list(row.names(px), names(px))
+  pxn<-as.data.frame(pxn)
+  
+  pyn<-normalize.quantiles(as.matrix(log2(py)))
+  dimnames(pyn)<-list(row.names(py), paste0("broad.",names(py)))
+  pyn<-as.data.frame(pyn)
+  
+  #merge 
+  pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+  row.names(pn)<-pn$Row.names
+  pn<-pn[,-which(names(pn)=="Row.names")]
+  
+  kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+  colnames(kld.matrix)=colnames(pn)
+  rownames(kld.matrix)=colnames(pn)
+  
+  #Calculate KLD for each pair
+  for (i in 1:ncol(pn)) {
+    for (j in 1:ncol(pn)) {
+      kld=KLD(pn[,i], pn[,j])
+      kld.matrix[i,j]=kld$sum.KLD.px.py
+    }
+  }
+  
+  write.table(kld.matrix, 
+              paste0("broad-sub.",species[n],".txt"),
+              row.names = T, quote = F, sep = "\t")
+  
+  kld.matrix.label<-kld.matrix
+  
+  #Label 5% top
+  for (x in 1:ncol(kld.matrix.label)) {
+    co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+    co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+    for (y in 1:ncol(pxn)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co1) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+    
+    for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co2) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+  }
+  
+  #Visualisation
+  
+  if (max(kld.matrix)>=0.1) {
+    break.limit<-ceiling(7.5*max(kld.matrix))/10
+  } else if (max(kld.matrix)>=0.01){
+    break.limit<-ceiling(75*max(kld.matrix))/100
+  } else {
+    break.limit<-ceiling(750*max(kld.matrix))/1000
+  }
+  
+  heatp<-pheatmap(kld.matrix,
+                  color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                  legend = TRUE, 
+                  breaks = seq(0, break.limit, break.limit/100),
+                  scale = "none",
+                  cluster_rows = FALSE, cluster_cols = FALSE,
+                  cutree_rows = NA, treeheight_row = 0,
+                  cutree_cols = NA, treeheight_col = 0,
+                  border_color = NA,
+                  legend_labels = "Kullback-Leibler divergence",
+                  display_numbers = kld.matrix.label,
+                  number_color = "black",
+                  fontsize_number = 10,
+                  cellwidth = 12, cellheight = 12, fontsize = 10,
+                  angle_col = c("90"),
+                  width = ncol(pn)*0.25, height = ncol(pn)*0.25,
+                  show_colnames = TRUE,
+                  show_rownames = TRUE,
+                  gaps_row = c(ncol(pxn)),
+                  gaps_col = c(ncol(pxn)),
+                  filename = paste0("broad-sub.",species[n],".png"))
+}
+
+#### set chem row
+Chem_cell_type_gene_FC <- read.delim(".../Synteny_KLD/Chem_cell_type_gene_FC")
+#class(Chem_cell_type_gene_FC[,1])
+test <- Chem_cell_type_gene_FC
+rownames(test) = test[,1]
+test = test[,-1]
+head(test)
+write.table(test, file="Chem_cell_type_gene_FC",sep = "\t", quote = FALSE)
+
+Chem_broad_cell_type_gene_FC <- read.delim("D:/PosDoc_202209/Singlecell.RNA/Synteny_KLD/cluster_ref/Chem_broad_cell_type_gene_FC")
+test <- Chem_broad_cell_type_gene_FC
+rownames(test) = test[,1]
+test = test[,-1]
+head(test)
+write.table(test, file="Chem_broad_cell_type_gene_FC", 
+            sep = "\t", quote = FALSE)
+#########
+
+##########ref to ref Seurat
+
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp",
+           "Chem")
+
+refcelltype<-c("","_broad")
+for (n in 1:length(species)) {
+  for (k in 1:length(refcelltype)){
+    #px = ref cell type
+    px<-read.delim(paste0(species[n], refcelltype[k], "_cell_type_gene_FC"), header = TRUE)
+    row.names(px)<-gsub(paste0(species[n],"_"), "", row.names(px))
+    row.names(px)<-gsub("-", "_", row.names(px))
+    #py = Seurat cell type
+    py<-read.delim(paste0("all.marker.wide.", species[n],".txt"), header = TRUE)
+    row.names(py)<-py$gene_id
+    py<-py[,-which(names(py)=="gene_id")]
+    row.names(py)<-gsub(paste0(species[n],"-"), "", row.names(py))
+    row.names(py)<-gsub("-", "_", row.names(py))
+    
+    #quantile normalization
+    pxn<-normalize.quantiles(as.matrix(log2(px)))
+    dimnames(pxn)<-list(row.names(px), names(px))
+    pxn<-as.data.frame(pxn)
+    
+    pyn<-normalize.quantiles(as.matrix(py))
+    dimnames(pyn)<-list(row.names(py), names(py))
+    pyn<-as.data.frame(pyn)
+    
+    #merge 
+    pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+    row.names(pn)<-pn$Row.names
+    pn<-pn[,-which(names(pn)=="Row.names")]
+    
+    kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+    colnames(kld.matrix)=colnames(pn)
+    rownames(kld.matrix)=colnames(pn)
+    
+    #Calculation KLD for each pair
+    for (i in 1:ncol(pn)) {
+      for (j in 1:ncol(pn)) {
+        kld=KLD(pn[,i], pn[,j])
+        kld.matrix[i,j]=kld$sum.KLD.px.py
+      }
+    } 
+    
+    write.table(kld.matrix, 
+                paste0("ref-seurat.",species[n],refcelltype[k],".txt"),
+                row.names = T, quote = F, sep = "\t")
+    
+    kld.matrix.label<-kld.matrix
+    #Label 5% top
+    for (x in 1:ncol(kld.matrix.label)) {
+      co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+      co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+      for (y in 1:ncol(pxn)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co1) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+      
+      for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co2) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+    }
+    
+    #Visualisation
+    
+    if (max(kld.matrix)>=0.1) {
+      break.limit<-ceiling(7.5*max(kld.matrix))/10
+    } else if (max(kld.matrix)>=0.01){
+      break.limit<-ceiling(75*max(kld.matrix))/100
+    } else {
+      break.limit<-ceiling(750*max(kld.matrix))/1000
+    }
+    
+    heatp<-pheatmap(kld.matrix,
+                    color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                    legend = TRUE, 
+                    breaks = seq(0, break.limit, break.limit/100),
+                    scale = "none",
+                    cluster_rows = FALSE, cluster_cols = FALSE,
+                    cutree_rows = NA, treeheight_row = 0,
+                    cutree_cols = NA, treeheight_col = 0,
+                    border_color = NA,
+                    legend_labels = "Kullback-Leibler divergence",
+                    display_numbers = kld.matrix.label,
+                    number_color = "black",
+                    fontsize_number = 10,
+                    cellwidth = 12, cellheight = 12, fontsize = 10,
+                    angle_col = c("90"),
+                    width = ncol(pn)*0.25+1, height = ncol(pn)*0.25,
+                    show_colnames = TRUE,
+                    show_rownames = TRUE,
+                    gaps_row = c(ncol(pxn)),
+                    gaps_col = c(ncol(pxn)),
+                    filename = paste0("ref-seurat.",species[n],refcelltype[k],".png"))
+  }
+}
+
+##Seurat to Seurat Res
+
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp",
+           "Chem"
+           )
+
+#py = Resc cell type
+py<-read.delim(paste0("all.marker.wide.", "Resc",".txt"), header = TRUE)
+py$gene_id<-gsub("-", "_", py$gene_id)
+py.bk<-py
+
+for (n in 1:length(species)) {
+  #ortholog pair
+  ortholog<-read.delim(paste0("ortholog.Rhopilema_esculentum__v__", species[n],".tsv.txt"), header = TRUE)
+  
+  ortholog<-separate(ortholog, gene1, c("gene","t"), sep = "-", remove = F)
+  ortholog<-ortholog[,c("gene","gene2")]
+  ortholog$gene<-gsub("-", "_", ortholog$gene)
+  ortholog<-unique(ortholog)
+  
+  names(ortholog)<-c("gene_id", "gene2")
+  
+  #px = ref cell type
+  px<-read.delim(paste0("all.marker.wide.", species[n],".txt"), header = TRUE)
+  names(px)[names(px)=="gene_id"]<-"gene"
+  
+  if (species[n]=="Hvul") {
+    ortholog<-separate(ortholog, gene2, c("sca","gene"), sep = "\\.g", remove = F)
+    ortholog<-ortholog[,c("gene_id","gene")]
+    ortholog$gene<-paste0("g",ortholog$gene)
+    ortholog$gene<-gsub("\\.t","-",ortholog$gene)
+    px$gene<-gsub("Hvul-", "", px$gene)
+  }
+  
+  if (species[n]=="Spis") {
+    names(ortholog)<-c("gene_id","gene")
+    ortholog$gene<-gsub("\\.","_",ortholog$gene)
+    px$gene<-gsub("Spis-", "", px$gene)
+    px$gene<-gsub("-", "_", px$gene)
+  }
+  
+  if (species[n]=="Nvec") {
+    names(ortholog)<-c("gene_id","gene")
+    ortholog$gene<-gsub("\\.","_",ortholog$gene)
+    px$gene<-gsub("Nvec-", "", px$gene)
+    px$gene<-gsub("-", "_", px$gene)
+  }
+  
+  if (species[n]=="Xesp") {
+    ortholog<-separate(ortholog, gene2, c("gene"), sep = "-", remove = F)
+    ortholog<-ortholog[,c("gene_id","gene")]
+    ortholog<-unique(ortholog)
+    px$gene<-gsub("Xesp-", "Xe_", px$gene)
+  }
+  
+  if (species[n]=="Chem") {
+    ortholog<-unique(ortholog)
+    px$gene<-gsub("-", "_", px$gene)
+    names(ortholog)<-c("gene_id", "gene")
+  }
+  
+  ortholog<-unique(ortholog)
+  
+  genecount<-as.data.frame(xtabs(~gene, ortholog))
+  genecount<-genecount[genecount$Freq <=3,]
+  ortholog<-ortholog[ortholog$gene %in% genecount$gene,]
+  
+  ortho.dup<-ortholog[duplicated(ortholog$gene)==T,]
+  ortholog<-ortholog[-which(ortholog$gene %in% ortho.dup$gene),]
+  
+  py<-py.bk
+  py<-merge(py, ortholog, by = "gene_id", all = F)
+  py<-py[,-which(names(py)=="gene_id")]
+  row.names(px)<-px$gene
+  px<-px[,-which(names(px)=="gene")]
+  names(px)<-paste0(species[n],".",names(px))
+  row.names(py)<-py$gene
+  py<-py[,-which(names(py)=="gene")]
+  names(py)<-paste0("Resc.",names(py))
+  
+  #quantile normalization
+  pxn<-normalize.quantiles(as.matrix(px))
+  dimnames(pxn)<-list(row.names(px), names(px))
+  pxn<-as.data.frame(pxn)
+  
+  pyn<-normalize.quantiles(as.matrix(py))
+  dimnames(pyn)<-list(row.names(py), names(py))
+  pyn<-as.data.frame(pyn)
+  
+  #merge 
+  pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+  row.names(pn)<-pn$Row.names
+  pn<-pn[,-which(names(pn)=="Row.names")]
+  
+  kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+  colnames(kld.matrix)=colnames(pn)
+  rownames(kld.matrix)=colnames(pn)
+  
+  #Calculation KLD for each pair
+  for (i in 1:ncol(pn)) {
+    for (j in 1:ncol(pn)) {
+      kld=KLD(pn[,i], pn[,j])
+      kld.matrix[i,j]=kld$sum.KLD.px.py
+    }
+  } 
+  
+  write.table(kld.matrix, 
+              paste0("seurat-seurat.",species[n],"-Resc.txt"),
+              row.names = T, quote = F, sep = "\t")
+  
+  kld.matrix.label<-kld.matrix
+  #Label 5% top
+  for (x in 1:ncol(kld.matrix.label)) {
+    co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+    co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+    for (y in 1:ncol(pxn)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co1) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+    
+    for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co2) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+  }
+  
+  #Visualisation
+  
+  if (max(kld.matrix)>=0.1) {
+    break.limit<-ceiling(7.5*max(kld.matrix))/10
+  } else if (max(kld.matrix)>=0.01){
+    break.limit<-ceiling(75*max(kld.matrix))/100
+  } else {
+    break.limit<-ceiling(750*max(kld.matrix))/1000
+  }
+  
+  heatp<-pheatmap(kld.matrix,
+                  color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                  legend = TRUE, 
+                  breaks = seq(0, break.limit, break.limit/100),
+                  scale = "none",
+                  cluster_rows = FALSE, cluster_cols = FALSE,
+                  cutree_rows = NA, treeheight_row = 0,
+                  cutree_cols = NA, treeheight_col = 0,
+                  border_color = NA,
+                  legend_labels = "Kullback-Leibler divergence",
+                  display_numbers = kld.matrix.label,
+                  number_color = "black",
+                  fontsize_number = 10,
+                  cellwidth = 12, cellheight = 12, fontsize = 10,
+                  angle_col = c("90"),
+                  width = ncol(pn)*0.25+1, height = ncol(pn)*0.25,
+                  show_colnames = TRUE,
+                  show_rownames = TRUE,
+                  gaps_row = c(ncol(pxn)),
+                  gaps_col = c(ncol(pxn)),
+                  filename = paste0("seurat-seurat.",species[n],"-Resc.png"))
+}
+
+##ref to Seurat Res
+
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp",
+           "Chem"
+           )
+
+refcelltype<-c("","_broad")
+
+py<-read.delim(paste0("all.marker.wide.", "Resc",".txt"), header = TRUE)
+py$gene_id<-gsub("-", "_", py$gene_id)
+py.bk<-py
+
+for (n in 1:length(species)) {
+  for (k in 1:length(refcelltype)){
+    
+    #ortholog pair
+    ortholog<-read.delim(paste0("ortholog.Rhopilema_esculentum__v__", species[n],".tsv.txt"), header = TRUE)
+    
+    ortholog<-separate(ortholog, gene1, c("gene","t"), sep = "-", remove = F)
+    ortholog<-ortholog[,c("gene","gene2")]
+    ortholog$gene<-gsub("-", "_", ortholog$gene)
+    ortholog<-unique(ortholog)
+    
+    names(ortholog)<-c("gene_id", "gene2")
+    
+    #px = ref cell type
+    px<-read.delim(paste0(species[n], refcelltype[k], "_cell_type_gene_FC"), header = TRUE)
+    row.names(px)<-gsub(paste0(species[n],"_"), "", row.names(px))
+    row.names(px)<-gsub("-", "_", row.names(px))
+    
+    if (species[n]=="Hvul") {
+      ortholog<-separate(ortholog, gene2, c("sca","gene"), sep = "\\.g", remove = F)
+      ortholog<-ortholog[,c("gene_id","gene")]
+      ortholog$gene<-paste0("g",ortholog$gene)
+      ortholog$gene<-gsub("\\.t","-",ortholog$gene)
+      ortholog$gene<-gsub("-", "_", ortholog$gene)
+      px$gene<-row.names(px)
+    }
+    
+    if (species[n]=="Spis") {
+      names(ortholog)<-c("gene_id","gene")
+      ortholog$gene<-gsub("\\.","_",ortholog$gene)
+      px$gene<-row.names(px)
+      px$gene<-gsub("Spis-", "", px$gene)
+      px$gene<-gsub("-", "_", px$gene)
+      
+    }
+    if (species[n]=="Nvec") {
+      names(ortholog)<-c("gene_id","gene")
+      ortholog$gene<-gsub("\\.","_",ortholog$gene)
+      px$gene<-row.names(px)
+      px$gene<-gsub("Nvec-", "", px$gene)
+      px$gene<-gsub("-", "_", px$gene)
+      
+    }
+    
+    if (species[n]=="Xesp") {
+      ortholog<-separate(ortholog, gene2, c("gene"), sep = "-", remove = F)
+      ortholog<-ortholog[,c("gene_id","gene")]
+      ortholog<-unique(ortholog)
+      px$gene<-row.names(px)
+      px$gene<-paste0("Xe_", px$gene)
+    }
+    
+    if (species[n]=="Chem") {
+      ortholog<-unique(ortholog)
+      px$gene<-row.names(px)
+      px$gene<-gsub("-", "_", px$gene)
+      names(ortholog)<-c("gene_id", "gene")
+    }
+    
+    ortholog<-unique(ortholog)
+    
+    genecount<-as.data.frame(xtabs(~gene, ortholog))
+    genecount<-genecount[genecount$Freq <=3,]
+    ortholog<-ortholog[ortholog$gene %in% genecount$gene,]
+    
+    ortho.dup<-ortholog[duplicated(ortholog$gene)==T,]
+    ortholog<-ortholog[-which(ortholog$gene %in% ortho.dup$gene),]
+    
+    py<-py.bk
+    py<-merge(py, ortholog, by = "gene_id", all = F)
+    py<-py[,-which(names(py)=="gene_id")]
+    row.names(px)<-px$gene
+    px<-px[,-which(names(px)=="gene")]
+    names(px)<-paste0(species[n],".",names(px))
+    row.names(py)<-py$gene
+    py<-py[,-which(names(py)=="gene")]
+    names(py)<-paste0("Resc.",names(py))
+    
+    #quantile normalization
+    pxn<-normalize.quantiles(as.matrix(log2(px)))
+    dimnames(pxn)<-list(row.names(px), names(px))
+    pxn<-as.data.frame(pxn)
+    
+    pyn<-normalize.quantiles(as.matrix(py))
+    dimnames(pyn)<-list(row.names(py), names(py))
+    pyn<-as.data.frame(pyn)
+    
+    #merge 
+    pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+    row.names(pn)<-pn$Row.names
+    pn<-pn[,-which(names(pn)=="Row.names")]
+    
+    kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+    colnames(kld.matrix)=colnames(pn)
+    rownames(kld.matrix)=colnames(pn)
+    
+    #Calculation KLD for each pair
+    for (i in 1:ncol(pn)) {
+      for (j in 1:ncol(pn)) {
+        kld=KLD(pn[,i], pn[,j])
+        kld.matrix[i,j]=kld$sum.KLD.px.py
+      }
+    } 
+    
+    write.table(kld.matrix, 
+                paste0("ref-seuratResc.",species[n],refcelltype[k],".txt"),
+                row.names = T, quote = F, sep = "\t")
+    
+    kld.matrix.label<-kld.matrix
+    #Label 5% top
+    for (x in 1:ncol(kld.matrix.label)) {
+      co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+      co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+      for (y in 1:ncol(pxn)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co1) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+      
+      for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co2) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+    }
+    
+    #Visualisation
+    
+    if (max(kld.matrix)>=0.1) {
+      break.limit<-ceiling(7.5*max(kld.matrix))/10
+    } else if (max(kld.matrix)>=0.01){
+      break.limit<-ceiling(75*max(kld.matrix))/100
+    } else {
+      break.limit<-ceiling(750*max(kld.matrix))/1000
+    }
+    
+    heatp<-pheatmap(kld.matrix,
+                    color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                    legend = TRUE, 
+                    breaks = seq(0, break.limit, break.limit/100),
+                    scale = "none",
+                    cluster_rows = FALSE, cluster_cols = FALSE,
+                    cutree_rows = NA, treeheight_row = 0,
+                    cutree_cols = NA, treeheight_col = 0,
+                    border_color = NA,
+                    legend_labels = "Kullback-Leibler divergence",
+                    display_numbers = kld.matrix.label,
+                    number_color = "black",
+                    fontsize_number = 10,
+                    cellwidth = 12, cellheight = 12, fontsize = 10,
+                    angle_col = c("90"),
+                    width = ncol(pn)*0.25+1, height = ncol(pn)*0.25+1,
+                    show_colnames = TRUE,
+                    show_rownames = TRUE,
+                    gaps_row = c(ncol(pxn)),
+                    gaps_col = c(ncol(pxn)),
+                    filename = paste0("ref-seuratResc.",species[n],refcelltype[k],".png"))
+  }
+}
+
+#1.3.2 for Aurelia
+library(LaplacesDemon)
+library(preprocessCore)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+
+setwd(".../Synteny_KLD")
+
+#Seurat to Seurat Acoe
+
+species<-c("Hvul", 
+           "Spis", 
+           "Nvec", 
+           "Xesp", 
+           "Chem", 
+           "Resc"  
+           )
+
+#py = Acoe cell type
+py<-read.delim(paste0("all.marker.wide.", "Acoe.txt"), header = TRUE)
+py$gene_id<-gsub("-", "_", py$gene_id)
+py.bk<-py
+
+for (n in 1:length(species)) {
+  #ortholog pair
+  ortholog<-read.delim(paste0("ortholog.Aurelia_coerulea__v__", species[n], ".tsv.txt"), header = TRUE)
+  ortholog<-separate(ortholog, gene1, c("gene","t"), sep = "-", remove = F)
+  ortholog<-ortholog[,c("gene","gene2")]
+  ortholog$gene<-gsub("-", "_", ortholog$gene)
+  ortholog<-unique(ortholog)
+  
+  names(ortholog)<-c("gene_id", "gene2")
+  
+  #px = ref cell type
+  px<-read.delim(paste0("all.marker.wide.", species[n], ".txt"), header = TRUE)
+  names(px)[names(px)=="gene_id"]<-"gene"
+  
+  if (species[n]=="Hvul") {
+    ortholog<-separate(ortholog, gene2, c("sca","gene"), sep = "\\.g", remove = F)
+    ortholog<-ortholog[,c("gene_id","gene")]
+    ortholog$gene<-paste0("g",ortholog$gene)
+    ortholog$gene<-gsub("\\.t","-",ortholog$gene)
+    px$gene<-gsub("Hvul-", "", px$gene)
+  }
+  
+  if (species[n]=="Spis") {
+    names(ortholog)<-c("gene_id","gene")
+    ortholog$gene<-gsub("\\.","_",ortholog$gene)
+    px$gene<-gsub("Spis-", "", px$gene)
+    px$gene<-gsub("-", "_", px$gene)
+  }
+  
+  if (species[n]=="Nvec") {
+    names(ortholog)<-c("gene_id","gene")
+    #ortholog$gene<-gsub("\\.","_",ortholog$gene)
+    #px$gene<-gsub("Nvec-", "", px$gene)
+    #px$gene<-gsub("-", "_", px$gene)
+  }
+  
+  if (species[n]=="Xesp") {
+    ortholog<-separate(ortholog, gene2, c("gene"), sep = "-", remove = F)
+    ortholog<-ortholog[,c("gene_id","gene")]
+    ortholog<-unique(ortholog)
+    px$gene<-gsub("Xesp-", "Xe_", px$gene)
+  }
+  
+  if (species[n]=="Chem") {
+    ortholog<-unique(ortholog)
+    px$gene<-gsub("-", "_", px$gene)
+    names(ortholog)<-c("gene_id", "gene")
+  }
+  
+  if (species[n]=="Resc") {
+    ortholog<-separate(ortholog, gene2, c("gene"), sep = "-", remove = F)
+    ortholog<-ortholog[,c("gene_id","gene")]
+    ortholog<-unique(ortholog)
+    px$gene<-gsub("-", "_", px$gene)
+  }
+  
+  ortholog<-unique(ortholog)
+  
+  genecount<-as.data.frame(xtabs(~gene, ortholog))
+  genecount<-genecount[genecount$Freq <=3,]
+  ortholog<-ortholog[ortholog$gene %in% genecount$gene,]
+  
+  ortho.dup<-ortholog[duplicated(ortholog$gene)==T,]
+  ortholog<-ortholog[-which(ortholog$gene %in% ortho.dup$gene),]
+  
+  py<-py.bk
+  py<-merge(py, ortholog, by = "gene_id", all = F)
+  py<-py[,-which(names(py)=="gene_id")]
+  row.names(px)<-px$gene
+  px<-px[,-which(names(px)=="gene")]
+  names(px)<-paste0(species[n],".",names(px))
+  
+  row.names(py)<-py$gene
+  py<-py[,-which(names(py)=="gene")]
+  names(py)<-paste0("AuMv1.",names(py))
+  
+  #quantile normalization
+  pxn<-normalize.quantiles(as.matrix(px))
+  dimnames(pxn)<-list(row.names(px), names(px))
+  pxn<-as.data.frame(pxn)
+  
+  pyn<-normalize.quantiles(as.matrix(py))
+  dimnames(pyn)<-list(row.names(py), names(py))
+  pyn<-as.data.frame(pyn)
+  
+  #merge 
+  pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+  row.names(pn)<-pn$Row.names
+  pn<-pn[,-which(names(pn)=="Row.names")]
+  
+  kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+  colnames(kld.matrix)=colnames(pn)
+  rownames(kld.matrix)=colnames(pn)
+  
+  #Calculation KLD for each pair
+  for (i in 1:ncol(pn)) {
+    for (j in 1:ncol(pn)) {
+      kld=KLD(pn[,i], pn[,j])
+      kld.matrix[i,j]=kld$sum.KLD.px.py
+    }
+  } 
+  
+  write.table(kld.matrix, 
+              paste0("seurat-seurat.",species[n],"-AuMv1.txt"),
+              row.names = T, quote = F, sep = "\t")
+  
+  kld.matrix.label<-kld.matrix
+  #Label 5% top
+  for (x in 1:ncol(kld.matrix.label)) {
+    co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+    co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+    for (y in 1:ncol(pxn)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co1) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+    
+    for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+      if (x==y) {
+        kld.matrix.label[y,x]<-""
+      } else {
+        if (kld.matrix.label[y,x]<=co2) {
+          kld.matrix.label[y,x] <- "*"
+        } else {
+          kld.matrix.label[y,x] <- ""
+        }
+      }
+    }
+  }
+  
+  #Visualisation
+  
+  if (max(kld.matrix)>=0.1) {
+    break.limit<-ceiling(7.5*max(kld.matrix))/10
+  } else if (max(kld.matrix)>=0.01){
+    break.limit<-ceiling(75*max(kld.matrix))/100
+  } else {
+    break.limit<-ceiling(750*max(kld.matrix))/1000
+  }
+  
+  heatp<-pheatmap(kld.matrix,
+                  color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                  legend = TRUE, 
+                  breaks = seq(0, break.limit, break.limit/100),
+                  scale = "none",
+                  cluster_rows = FALSE, cluster_cols = FALSE,
+                  cutree_rows = NA, treeheight_row = 0,
+                  cutree_cols = NA, treeheight_col = 0,
+                  border_color = NA,
+                  legend_labels = "Kullback-Leibler divergence",
+                  display_numbers = kld.matrix.label,
+                  number_color = "black",
+                  fontsize_number = 10,
+                  cellwidth = 12, cellheight = 12, fontsize = 10,
+                  angle_col = c("90"),
+                  width = ncol(pn)*0.25+1, height = ncol(pn)*0.25,
+                  show_colnames = TRUE,
+                  show_rownames = TRUE,
+                  gaps_row = c(ncol(pxn)),
+                  gaps_col = c(ncol(pxn)),
+                  filename = paste0("seurat-seurat.",species[n],"-AcoeMv1.png")
+                  )
+}
+
+##ref to Seurat Acoe
+
+species<-c("Hvul", 
+           "Spis",
+           "Nvec",
+           "Xesp",
+           "Chem"
+)
+
+refcelltype<-c("","_broad")
+
+py<-read.delim(paste0("all.marker.wide.", "Acoe.txt"), header = TRUE)
+py$gene_id<-gsub("-", "_", py$gene_id)
+py.bk<-py
+
+for (n in 1:length(species)) {
+  for (k in 1:length(refcelltype)){
+    
+    #ortholog pair
+    ortholog<-read.delim(paste0("ortholog.Aurelia_coerulea__v__", species[n],".tsv.txt"), header = TRUE)
+    ortholog<-separate(ortholog, gene1, c("gene","t"), sep = "-", remove = F)
+    ortholog<-ortholog[,c("gene","gene2")]
+    ortholog$gene<-gsub("-", "_", ortholog$gene)
+    ortholog<-unique(ortholog)
+    
+    names(ortholog)<-c("gene_id", "gene2")
+    
+    #px = ref cell type
+    px<-read.delim(paste0(species[n], refcelltype[k], "_cell_type_gene_FC"), header = TRUE)
+    row.names(px)<-gsub(paste0(species[n],"_"), "", row.names(px))
+    row.names(px)<-gsub("-", "_", row.names(px))
+    
+    if (species[n]=="Hvul") {
+      ortholog<-separate(ortholog, gene2, c("sca","gene"), sep = "\\.g", remove = F)
+      ortholog<-ortholog[,c("gene_id","gene")]
+      ortholog$gene<-paste0("g",ortholog$gene)
+      ortholog$gene<-gsub("\\.t","-",ortholog$gene)
+      ortholog$gene<-gsub("-", "_", ortholog$gene)
+      px$gene<-row.names(px)
+    }
+    
+    if (species[n]=="Spis") {
+      names(ortholog)<-c("gene_id","gene")
+      ortholog$gene<-gsub("\\.","_",ortholog$gene)
+      px$gene<-row.names(px)
+      px$gene<-gsub("Spis-", "", px$gene)
+      px$gene<-gsub("-", "_", px$gene)
+      
+    }
+    if (species[n]=="Nvec") {
+      names(ortholog)<-c("gene_id","gene")
+      ortholog$gene<-gsub("\\.","_",ortholog$gene)
+      px$gene<-row.names(px)
+      px$gene<-gsub("Nvec-", "", px$gene)
+      px$gene<-gsub("-", "_", px$gene)
+      
+    }
+    
+    if (species[n]=="Xesp") {
+      ortholog<-separate(ortholog, gene2, c("gene"), sep = "-", remove = F)
+      ortholog<-ortholog[,c("gene_id","gene")]
+      ortholog<-unique(ortholog)
+      px$gene<-row.names(px)
+      px$gene<-paste0("Xe_", px$gene)
+    }
+    
+    if (species[n]=="Chem") {
+      ortholog<-unique(ortholog)
+      px$gene<-row.names(px)
+      px$gene<-gsub("-", "_", px$gene)
+      names(ortholog)<-c("gene_id", "gene")
+    }
+    
+    ortholog<-unique(ortholog)
+    
+    genecount<-as.data.frame(xtabs(~gene, ortholog))
+    genecount<-genecount[genecount$Freq <=3,]
+    ortholog<-ortholog[ortholog$gene %in% genecount$gene,]
+    
+    ortho.dup<-ortholog[duplicated(ortholog$gene)==T,]
+    ortholog<-ortholog[-which(ortholog$gene %in% ortho.dup$gene),]
+    
+    py<-py.bk
+    py<-merge(py, ortholog, by = "gene_id", all = F)
+    py<-py[,-which(names(py)=="gene_id")]
+    row.names(px)<-px$gene
+    px<-px[,-which(names(px)=="gene")]
+    names(px)<-paste0(species[n],".",names(px))
+    row.names(py)<-py$gene
+    py<-py[,-which(names(py)=="gene")]
+    names(py)<-paste0("Acoe.",names(py))
+    
+    #quantile normalization
+    pxn<-normalize.quantiles(as.matrix(log2(px)))
+    dimnames(pxn)<-list(row.names(px), names(px))
+    pxn<-as.data.frame(pxn)
+    
+    pyn<-normalize.quantiles(as.matrix(py))
+    dimnames(pyn)<-list(row.names(py), names(py))
+    pyn<-as.data.frame(pyn)
+    
+    #merge 
+    pn<-merge(pxn, pyn, by = "row.names", all = FALSE)
+    row.names(pn)<-pn$Row.names
+    pn<-pn[,-which(names(pn)=="Row.names")]
+    
+    kld.matrix<-as.data.frame(matrix(data = NA, nrow = ncol(pn), ncol = ncol(pn)))
+    colnames(kld.matrix)=colnames(pn)
+    rownames(kld.matrix)=colnames(pn)
+    
+    #Calculation KLD for each pair
+    for (i in 1:ncol(pn)) {
+      for (j in 1:ncol(pn)) {
+        kld=KLD(pn[,i], pn[,j])
+        kld.matrix[i,j]=kld$sum.KLD.px.py
+      }
+    } 
+    
+    write.table(kld.matrix, 
+                paste0("ref-seuratAcoeMv1.",species[n],refcelltype[k],".txt"),
+                row.names = T, quote = F, sep = "\t")
+    
+    kld.matrix.label<-kld.matrix
+    #Label 5% top
+    for (x in 1:ncol(kld.matrix.label)) {
+      co1<-quantile(as.matrix(kld.matrix[1:ncol(pxn),x]), 0.05)
+      co2<-quantile(as.matrix(kld.matrix[(ncol(pxn)+1):ncol(kld.matrix), x]), 0.05)
+      for (y in 1:ncol(pxn)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co1) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+      
+      for (y in (ncol(pxn)+1):ncol(kld.matrix)) {
+        if (x==y) {
+          kld.matrix.label[y,x]<-""
+        } else {
+          if (kld.matrix.label[y,x]<=co2) {
+            kld.matrix.label[y,x] <- "*"
+          } else {
+            kld.matrix.label[y,x] <- ""
+          }
+        }
+      }
+    }
+    
+    #Visualisation
+    
+    if (max(kld.matrix)>=0.1) {
+      break.limit<-ceiling(7.5*max(kld.matrix))/10
+    } else if (max(kld.matrix)>=0.01){
+      break.limit<-ceiling(75*max(kld.matrix))/100
+    } else {
+      break.limit<-ceiling(750*max(kld.matrix))/1000
+    }
+    
+    heatp<-pheatmap(kld.matrix,
+                    color = c(colorRampPalette(colors = c('#E31A1C','#F2F2F0','#5A8FCA'))(100)),
+                    legend = TRUE, 
+                    breaks = seq(0, break.limit, break.limit/100),
+                    scale = "none",
+                    cluster_rows = FALSE, cluster_cols = FALSE,
+                    cutree_rows = NA, treeheight_row = 0,
+                    cutree_cols = NA, treeheight_col = 0,
+                    border_color = NA,
+                    legend_labels = "Kullback-Leibler divergence",
+                    display_numbers = kld.matrix.label,
+                    number_color = "black",
+                    fontsize_number = 10,
+                    cellwidth = 12, cellheight = 12, fontsize = 10,
+                    angle_col = c("90"),
+                    width = ncol(pn)*0.25+1, height = ncol(pn)*0.25+1,
+                    show_colnames = TRUE,
+                    show_rownames = TRUE,
+                    gaps_row = c(ncol(pxn)),
+                    gaps_col = c(ncol(pxn)),
+                    filename = paste0("ref-seuratAcoeMv1.",species[n],refcelltype[k],".png"))
+  }
+}
