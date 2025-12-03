@@ -1,0 +1,457 @@
+#1.2.1 KEGG
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clusterProfiler)
+
+#read in kegg2name
+kegg2name <- read.delim(".../kegg2name.txt", 
+                        sep = "\t", colClasses = "character")
+
+setwd(".../KEGG")
+
+#Whole gene Annotation file
+#for Aurelia
+eggnog<-read.delim(".../Jellyfish_Aurelia_emapper.annotations", 
+                   header = FALSE, skip = 5)
+##Output of all marker genes from seurat
+DEG<-read.delim(".../findallmarker.Moon.withname.txt, 
+                header = TRUE)
+#for Rhopilema
+eggnog<-read.delim(".../Jellyfish_edible_hic.proteins.33208.eggnog.emapper.annotations.xls", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../findallmarker.Edible.withname.txt, 
+                header = TRUE)
+
+#DEG$Genes<-gsub("-", "_", DEG$Genes)
+DEG<-DEG[is.na(DEG$Genes)==F,]
+DEG.bk<-DEG
+DEG<-DEG.bk[DEG.bk$avg_log2FC >= 1,]
+
+eggnog<-separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+pathways<-eggnog[,c(2,15)]
+pathways<-separate(pathways, V13, c("ko","map"), sep = ",map", remove = FALSE)
+pathways<-pathways[,c(1,3)]
+names(pathways)[1]="Genes"
+names(pathways)[2]="KEGG"
+#pathways$KEGG<-gsub("ko", "", pathways$KEGG)
+#remove blank kegg
+pathways<-subset(pathways, KEGG != "-", select = c("Genes", "KEGG"))
+
+#Format GenesKEGGpair
+GenesKEGGpair.1v1<-matrix(NA, nrow = 1, ncol = 2)
+GenesKEGGpair.1v1<-as.data.frame(GenesKEGGpair.1v1)
+names(GenesKEGGpair.1v1)[1]="Genes"
+names(GenesKEGGpair.1v1)[2]="KEGG"
+
+#format
+for (i in 1:nrow(pathways)) {
+  subtable<-pathways[i,]
+  rcnames<-list(c(strsplit(subtable$Genes[1], ',')[[1]]),c(strsplit(subtable$KEGG[1], ',')[[1]]))
+  pairtable<-matrix(data = NA, nrow = length(rcnames[[1]]), ncol = length(rcnames[[2]]), dimnames = rcnames)
+  pairtable<-as.data.frame(pairtable)
+  pairtable$Genes<-rownames(pairtable)
+  rownames(pairtable)<-1:nrow(pairtable)
+  pairtable<-as.data.frame(pairtable)
+  pairtable.new<-pairtable %>% gather(KEGG, pair, c(1:ncol(pairtable)-1))
+  pairtable.new<-pairtable.new[,c(1:2)]
+  GenesKEGGpair.1v1<-rbind(GenesKEGGpair.1v1, pairtable.new)
+}
+
+GenesKEGGpair.1v1<-subset(GenesKEGGpair.1v1, 
+                          is.na(GenesKEGGpair.1v1$Genes)==FALSE, 
+                          select = c("KEGG", "Genes"))
+GenesKEGGpair.1v1<-unique(GenesKEGGpair.1v1)
+rm(pairtable, pairtable.new, rcnames, subtable, pathways)
+
+####KEGG enrich
+KEGG.all.1<-compareCluster(Genes ~ cluster, 
+                           data = DEG, 
+                           fun = 'enricher',
+                           TERM2GENE = GenesKEGGpair.1v1,
+                           TERM2NAME = kegg2name,
+                           pvalueCutoff = 1,
+                           pAdjustMethod = "BH",
+                           qvalueCutoff = 1,
+                           minGSSize = 1,
+                           maxGSSize = 10000)
+
+##Plot
+addline_format <- function(x,...){ 
+  gsub('_','\n',x) 
+} 
+
+####KEGG
+kegg2ont<- read.delim(".../kegglevel.AC.txt", 
+                      sep = "\t", colClasses = "character")
+names(kegg2ont)[2]="ID"
+
+plotin<-as.data.frame(KEGG.all.1)
+View(plotin)
+plotin<-subset(plotin, is.na(Description)==FALSE)
+
+plotinsep<-separate(plotin, "GeneRatio", c("Genenumerator", "Genedenominator"),sep = "/", remove = FALSE, convert = TRUE)
+plotinsep<-separate(plotinsep, "BgRatio", c("BGnumerator", "BGdenominator"),sep = "/", remove = FALSE, convert = TRUE)
+
+plotdata<-subset(plotinsep, is.na(Description) == FALSE & p.adjust < 0.2)
+
+plotdata<-merge(plotdata, kegg2ont, by = "ID", all.x = TRUE)
+plotdata$ratio=plotdata$Genenumerator/plotdata$BGnumerator
+plotdata$Group=paste(plotdata$Cluster, "(", plotdata$Genedenominator, ")")
+plotdata$Description<-paste(plotdata$Description,"(", plotdata$BGnumerator, ")")
+write.table(plotdata, "KEGG.cell.type.enrich.logFC1.txt", quote = F, row.names = F, sep = "\t")
+
+list(plotdata$Group)
+unique(plotdata$Group)
+
+plotdata<-subset(plotdata, Genenumerator >=1)
+plotdata1<-plotdata[plotdata$ONTOLOGY !="Human Diseases",]
+
+#p.adjust< 0.05
+a<-ggplot(subset(plotdata1, p.adjust < 0.05), aes(x = Group, y = Description, size = ratio, colour = p.adjust))+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  #Aurelia
+  scale_x_discrete(limits = c("0 ( 152 )","11 ( 272 )","7 ( 78 )", "1 ( 64 )","5 ( 114 )",
+  "6 ( 178 )","2 ( 186 )","3 ( 216 )","8 ( 67 )","9 ( 116 )","10 ( 101 )","4 ( 221 )"))+
+  #Rhopilema
+  #scale_x_discrete(limits = c("3 ( 174 )","5 ( 464 )","2 ( 229 )","7 ( 147 )",
+  #                           "8 ( 239 )","1 ( 165 )","4 ( 200 )","6 ( 149 )",
+  #                           "9 ( 169 )","10 ( 209 )","11 ( 437 )","0 ( 45 )"))+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 15), 
+        axis.text.x = element_text(size = 15, angle = 90), 
+        axis.text.y = element_text(size = 15),
+        legend.title = element_text(size = 15), 
+        plot.title = element_text(size = 16))+
+  facet_grid(ONTOLOGY~., scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 15))
+a
+ggsave("KEGGp1.cell.type.ordered.p0.05.png", 
+       width = 20, 
+       height = 0.25*length(unique(plotdata1[plotdata1$p.adjust < 0.05, "Description"])), 
+       units = "in", dpi = 600, limitsize = FALSE)
+
+#1.2.2 KOG
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(clusterProfiler)
+
+#read in kog2name
+kog2name<-read.delim(".../kog2name.txt", 
+                        sep = "\t", colClasses = "character")
+
+setwd(".../KOG")
+
+#for Aurelia
+eggnog<-read.delim(".../Jellyfish_Aurelia_emapper.annotations", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../findallmarker.Moon.withname.txt, 
+                header = TRUE)
+#for Rhopilema
+eggnog<-read.delim(".../Jellyfish_edible_hic.proteins.33208.eggnog.emapper.annotations.xls", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../findallmarker.Edible.withname.txt, 
+                header = TRUE)
+
+DEG$Genes<-gsub("-", "_", DEG$Genes)
+DEG<-DEG[is.na(DEG$Genes)==F,]
+DEG.bk<-DEG
+
+eggnog<-separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+pathways<-eggnog[,c(2,9)]
+names(pathways)[1]="Genes"
+names(pathways)[2]="KOG"
+pathways<-subset(pathways, KOG != "")
+
+#Format GenesKEGGpair
+GenesKOGpair.1v1<-matrix(NA, nrow = 1, ncol = 2)
+GenesKOGpair.1v1<-as.data.frame(GenesKOGpair.1v1)
+names(GenesKOGpair.1v1)[1]="Genes"
+names(GenesKOGpair.1v1)[2]="KOG"
+
+for (i in 1:nrow(pathways)) {
+  subtable<-pathways[i,]
+  rcnames<-list(c(strsplit(subtable$Genes[1], ',')[[1]]),c(strsplit(subtable$KOG[1], '')[[1]]))
+  pairtable<-matrix(data = NA, nrow = length(rcnames[[1]]), ncol = length(rcnames[[2]]), dimnames = rcnames)
+  pairtable<-as.data.frame(pairtable)
+  pairtable$Genes<-rownames(pairtable)
+  rownames(pairtable)<-1:nrow(pairtable)
+  pairtable<-as.data.frame(pairtable)
+  pairtable.new<-pairtable %>% gather(KOG, pair, c(1:ncol(pairtable)-1))
+  pairtable.new<-pairtable.new[,c(1:2)]
+  GenesKOGpair.1v1<-rbind(GenesKOGpair.1v1, pairtable.new)
+}
+GenesKOGpair.1v1<-subset(GenesKOGpair.1v1, 
+                          is.na(GenesKOGpair.1v1$Genes)==FALSE, 
+                          select = c("KOG", "Genes"))
+GenesKOGpair.1v1<-unique(GenesKOGpair.1v1)
+rm(pairtable, pairtable.new, rcnames, subtable, pathways)
+
+
+####KOG enrich
+KOG.all.1<-compareCluster(Genes ~ cluster, 
+                           data = DEG, 
+                           fun = 'enricher',
+                           TERM2GENE = GenesKOGpair.1v1,
+                           TERM2NAME = kog2name,
+                           pvalueCutoff = 1,
+                           pAdjustMethod = "BH",
+                           qvalueCutoff = 1,
+                           minGSSize = 1,
+                           maxGSSize = 10000)
+
+addline_format <- function(x,...){ 
+  gsub('_','\n',x) 
+} 
+
+#Plot
+plotin<-as.data.frame(KOG.all.1)
+View(plotin)
+plotin<-subset(plotin, is.na(Description)==FALSE)
+
+plotinsep<-separate(plotin, "GeneRatio", c("Genenumerator", "Genedenominator"),sep = "/", remove = FALSE, convert = TRUE)
+plotinsep<-separate(plotinsep, "BgRatio", c("BGnumerator", "BGdenominator"),sep = "/", remove = FALSE, convert = TRUE)
+
+colnames(plotinsep)[names(plotinsep)=="ID"]<-"kogClass"
+kog2name$ONTOLOGY<-gsub( "INFORMATION STORAGE AND PROCESSING", "Information storage\nand processing", kog2name$ONTOLOGY)
+kog2name$ONTOLOGY<-gsub( "CELLULAR PROCESSES AND SIGNALING", "Cellular processes\nand signaling", kog2name$ONTOLOGY)
+kog2name$ONTOLOGY<-gsub( "POORLY CHARACTERIZED", "Poor", kog2name$ONTOLOGY)
+kog2name$ONTOLOGY<-gsub( "METABOLISM", "Metabolism", kog2name$ONTOLOGY)
+plotdata<-merge(plotinsep, kog2name, by = c("kogClass"), all.x = TRUE)
+
+plotdata$ratio=plotdata$Genenumerator/plotdata$BGnumerator
+plotdata$Group=paste(plotdata$Cluster, "(", plotdata$Genedenominator, ")")
+plotdata$Description<-paste(plotdata$Description,"(", plotdata$BGnumerator, ")")
+
+list(plotdata$Group)
+unique(plotdata$Group)
+
+#plotdata1<-plotdata[plotdata$treatment %in% comparegroup,]
+plotdata1<-subset(plotdata, Genenumerator >=1)
+plotdata1<-plotdata1[plotdata1$ONTOLOGY !="NA",]
+
+a<-ggplot(subset(plotdata1, p.adjust < 0.05), aes(x = Group, y = Description, size = ratio, colour = p.adjust))+
+  labs(title = "KOG Enrichment")+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  #for Aurelia
+  scale_x_discrete(limits = c("0 ( 264 )","11 ( 415 )","7 ( 145 )", "1 ( 130 )","5 ( 234 )",
+                              "6 ( 426 )","2 ( 321 )","3 ( 347 )","8 ( 139 )","9 ( 215 )",
+                              "10 ( 226 )","4 ( 309 )"))+
+  #for Rhopilema
+  #scale_x_discrete(limits = c("3 ( 174 )","5 ( 464 )","2 ( 229 )","7 ( 147 )",
+  #                           "8 ( 239 )","1 ( 165 )","4 ( 200 )","6 ( 149 )",
+  #                           "9 ( 169 )","10 ( 209 )","11 ( 437 )","0 ( 45 )"))+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 11), 
+        axis.text.x = element_text(size = 11, angle = 90), 
+        axis.text.y = element_text(size = 11),
+        legend.title = element_text(size = 11), 
+        plot.title = element_text(size = 12))+
+  facet_grid(ONTOLOGY~., scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 8))
+a
+
+ggsave("cell.type.KOGp1.p0.05.tiff", width = 20, 
+       height = 0.3*length(unique(plotdata1[plotdata1$p.adjust < 0.05, "Description"])),
+       units = "in", dpi = 300)
+
+#1.2.3 GO
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(clusterProfiler)
+
+#read in kog2name
+go2name<-read.delim(".../go2name.txt", 
+                    sep = "\t", colClasses = "character",
+                    header = FALSE)
+names(go2name)[1]="goClass"
+names(go2name)[2]="goName"
+names(go2name)[3]="ONTOLOGY"
+
+setwd(".../GO")
+
+#for Aurelia
+eggnog<-read.delim(".../Jellyfish_Aurelia_emapper.annotations", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../findallmarker.Moon.withname.txt, 
+                header = TRUE)
+#for Rhopilema
+eggnog<-read.delim(".../Jellyfish_edible_hic.proteins.33208.eggnog.emapper.annotations.xls", 
+                   header = FALSE, skip = 5)
+DEG<-read.delim(".../findallmarker.Edible.withname.txt, 
+                header = TRUE)
+
+DEG$Genes<-gsub("-", "_", DEG$Genes)
+DEG<-DEG[is.na(DEG$Genes)==F,]
+DEG.bk<-DEG
+
+eggnog<-separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+pathways<-eggnog[,c(2,12)]
+names(pathways)[1]="Genes"
+names(pathways)[2]="GO"
+pathways<-subset(pathways, GO != "")
+
+#Format GenesKEGGpair
+GenesGOpair.1v1<-matrix(NA, nrow = 1, ncol = 2)
+GenesGOpair.1v1<-as.data.frame(GenesGOpair.1v1)
+names(GenesGOpair.1v1)[1]="Genes"
+names(GenesGOpair.1v1)[2]="GO"
+
+for (i in 1:nrow(pathways)) {
+  subtable<-pathways[i,]
+  rcnames<-list(c(strsplit(subtable$Genes[1], ',')[[1]]),c(strsplit(subtable$GO[1], ',')[[1]]))
+  pairtable<-matrix(data = NA, nrow = length(rcnames[[1]]), ncol = length(rcnames[[2]]), dimnames = rcnames)
+  pairtable<-as.data.frame(pairtable)
+  pairtable$Genes<-rownames(pairtable)
+  rownames(pairtable)<-1:nrow(pairtable)
+  pairtable<-as.data.frame(pairtable)
+  pairtable.new<-pairtable %>% gather(GO, pair, c(1:ncol(pairtable)-1))
+  pairtable.new<-pairtable.new[,c(1:2)]
+  GenesGOpair.1v1<-rbind(GenesGOpair.1v1, pairtable.new)
+}
+GenesGOpair.1v1<-subset(GenesGOpair.1v1, 
+                        is.na(GenesGOpair.1v1$Genes)==FALSE, 
+                        select = c("GO", "Genes"))
+GenesGOpair.1v1<-unique(GenesGOpair.1v1)
+GenesGOpair.1v1<-GenesGOpair.1v1[is.na(GenesGOpair.1v1$Genes)==F,]
+GenesGOpair.1v1 <- GenesGOpair.1v1[!grepl("-", GenesGOpair.1v1$GO),]
+
+#GenesGOpair.1v1 order
+#GenesGOpair.1v1<-GenesGOpair.1v1[,c(2,1)]
+rm(pairtable, pairtable.new, rcnames, subtable, pathways)
+
+####GO enrich
+GO.all.1<-compareCluster(Genes ~ cluster, 
+                         data = DEG, 
+                         fun = 'enricher',
+                         TERM2GENE = GenesGOpair.1v1,
+                         TERM2NAME = go2name,
+                         pvalueCutoff = 0.2,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.2,
+                         minGSSize = 0,
+                         maxGSSize = 100000)
+
+addline_format <- function(x,...){ 
+  gsub('_','\n',x) 
+} 
+
+#Plot
+plotin<-as.data.frame(GO.all.1)
+View(plotin)
+plotin<-subset(plotin, is.na(Description)==FALSE)
+
+plotinsep<-separate(plotin, "GeneRatio", c("Genenumerator", "Genedenominator"),sep = "/", remove = FALSE, convert = TRUE)
+plotinsep<-separate(plotinsep, "BgRatio", c("BGnumerator", "BGdenominator"),sep = "/", remove = FALSE, convert = TRUE)
+
+colnames(plotinsep)[colnames(plotinsep)=="ID"]<-"goClass"
+go2name$ONTOLOGY<-gsub( "biological_process", "Biological Process", go2name$ONTOLOGY)
+go2name$ONTOLOGY<-gsub( "molecular_function", "Molecular Function", go2name$ONTOLOGY)
+go2name$ONTOLOGY<-gsub( "cellular_component", "Cellular Component", go2name$ONTOLOGY)
+
+plotdata<-merge(plotinsep, go2name, by = c("goClass"), all.x = TRUE)
+
+plotdata$ratio=plotdata$Genenumerator/plotdata$BGnumerator
+plotdata$Group=paste(plotdata$Cluster, "(", plotdata$Genedenominator, ")")
+plotdata$Description<-paste(plotdata$Description,"(", plotdata$BGnumerator, ")")
+write.table(plotdata, "GO.enrich.txt", quote = F, row.names = F, sep = "\t")
+
+list(plotdata$Group)
+unique(plotdata$Group)
+
+##BP
+a<-ggplot(subset(plotdata, ratio >= 0.5 & p.adjust < 0.05 & ONTOLOGY == "Biological Process" ), 
+          aes(x = Group, y = Description, size = ratio, colour = p.adjust))+
+  labs(title = "GO Enrichment: Biological Process")+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  #for Aurelia
+  scale_x_discrete(limits = c("0 ( 264 )","11 ( 415 )","7 ( 145 )", "1 ( 130 )","5 ( 234 )",
+                               "6 ( 426 )","2 ( 321 )","3 ( 347 )","8 ( 139 )","9 ( 215 )",
+                               "10 ( 226 )","4 ( 309 )"))+
+  #for Rhopilema
+  #scale_x_discrete(limits = c("3 ( 133 )","5 ( 381 )","2 ( 154 )","7 ( 116 )",
+  #                           "8 ( 187 )","1 ( 120 )","4 ( 140 )","6 ( 81 )",
+  #                           "9 ( 125 )","10 ( 156 )","11 ( 379 )","0 ( 30 )"))+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 18), 
+        axis.text.x = element_text(size = 18, angle = 90), 
+        axis.text.y = element_text(size = 18),
+        legend.title = element_text(size = 18), 
+        plot.title = element_text(size = 14))+
+  facet_grid(ONTOLOGY~., scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 10))
+a
+ggsave("GOp1.BP.png", width = 50, 
+       height = 0.15*length(unique(plotdata[plotdata$p.adjust < 0.05 & plotdata$ratio>= 0.5, "Description"])), 
+       units = "in", dpi = 300, limitsize = F)
+
+
+a<-ggplot(subset(plotdata, ratio >= 0.5 & p.adjust < 0.05 & ONTOLOGY == "Molecular Function" ), 
+          aes(x = Group, y = Description, size = ratio, colour = p.adjust))+
+  labs(title = "GO Enrichment: Molecular Function")+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  #for Aurelia
+  scale_x_discrete(limits = c("0 ( 264 )","11 ( 415 )","7 ( 145 )", "1 ( 130 )","5 ( 234 )",
+                               "6 ( 426 )","2 ( 321 )","3 ( 347 )","8 ( 139 )","9 ( 215 )",
+                               "10 ( 226 )","4 ( 309 )"))+
+  #for Rhopilema
+  #scale_x_discrete(limits = c("3 ( 133 )","5 ( 381 )","2 ( 154 )","7 ( 116 )",
+  #                           "8 ( 187 )","1 ( 120 )","4 ( 140 )","6 ( 81 )",
+  #                           "9 ( 125 )","10 ( 156 )","11 ( 379 )","0 ( 30 )"))+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 18), 
+        axis.text.x = element_text(size = 18, angle = 90), 
+        axis.text.y = element_text(size = 18),
+        legend.title = element_text(size = 18), 
+        plot.title = element_text(size = 14))+
+  facet_grid(ONTOLOGY~., scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 10))
+a
+ggsave("GOp1.MF.png", width = 40, 
+       height = 0.05*length(unique(plotdata[plotdata$p.adjust < 0.05 & plotdata$ratio>= 0.5, "Description"])),
+       units = "in", dpi = 300, limitsize = F)
+
+a<-ggplot(subset(plotdata, ratio >= 0.5 & p.adjust < 0.05 & ONTOLOGY == "Cellular Component" ), 
+          aes(x = Group, y = Description, size = ratio, colour = p.adjust))+
+  labs(title = "GO Enrichment: Cellular Component")+
+  geom_point(shape = 19)+scale_size_area()+
+  scale_color_gradient(low = "#FF0000", high = "#0000FF", limits = c(0,0.05))+
+  #for Aurelia
+  scale_x_discrete(limits = c("0 ( 264 )","11 ( 415 )","7 ( 145 )", "1 ( 130 )","5 ( 234 )",
+                               "6 ( 426 )","2 ( 321 )","3 ( 347 )","8 ( 139 )","9 ( 215 )",
+                               "10 ( 226 )","4 ( 309 )"))+
+  #for Rhopilema
+  #scale_x_discrete(limits = c("3 ( 133 )","5 ( 381 )","2 ( 154 )","7 ( 116 )",
+  #                           "8 ( 187 )","1 ( 120 )","4 ( 140 )","6 ( 81 )",
+  #                           "9 ( 125 )","10 ( 156 )","11 ( 379 )","0 ( 30 )"))+
+  theme(panel.border = element_rect(colour = "black", fill = NA, size = 0.5), 
+        axis.title.x = element_text(colour = "white"), 
+        axis.title.y = element_text(colour = "white"), 
+        axis.text = element_text(colour = "black", size = 18), 
+        axis.text.x = element_text(size = 18, angle = 90), 
+        axis.text.y = element_text(size = 18),
+        legend.title = element_text(size = 18), 
+        plot.title = element_text(size = 14))+
+  facet_grid(ONTOLOGY~., scales = "free", space = "free")+
+  theme(strip.text = element_text(size = 10))
+a
+ggsave("GOp1.CC.png", width = 40, 
+       #height = 10
+       height = 0.05*length(unique(plotdata[plotdata$p.adjust < 0.05 & plotdata$ratio>= 0.5, "Description"])),
+       units = "in", dpi = 300, limitsize = F)
