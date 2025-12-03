@@ -1,0 +1,136 @@
+#1.6.1 orthofinder
+ulimit -n 2600
+##create a directory that contains the longest-transcripts of taxa 
+
+##conda activate orthofinder
+orthofinder -f `pwd`/longest-gene_15species -t 60 -a 60 -M msa -S diamond
+
+#1.6.2 gene_family_search
+#01_run_batch.hmmer.sh
+cat pfam_CDD_name.list | while read pfam CDD name; do 
+
+##protein file contain the longest-transcripts of 15 species 
+prot="15species.fa"
+
+PF_pref="$( echo "$pfam" | sed 's/pfam/PF/' )"
+hmm="$(grep "$PF_pref" ~/bin/hmmer-3.3.1/Pfam_seed/Pfam-A.hmm | sed 's/ACC.*PF/PF/')" 
+
+mkdir $name
+cd $name
+
+hmmfetch ~/bin/hmmer-3.3.1/Pfam_seed/Pfam-A.hmm $hmm > $hmm.hmm
+
+hmmpress $hmm.hmm
+
+hmmscan --domtblout $hmm.scan.out.txt -E 1e-5 $hmm.hmm $prot
+
+
+awk '!/#/ {print $4}' $hmm.scan.out.txt | awk '!a[$0]++' > $hmm.scan.dedup.txt 
+
+seqtk subseq  $prot $hmm.scan.dedup.txt  > $hmm.scan.dedup.protein.fa 
+
+sed 's/|.*//' $hmm.scan.dedup.txt | awk '{A[$1]++}END{for(i in A)print i,A[i]}' > $hmm.scan.dedup.count
+
+echo `date` "Done hmmscan for pfam "$name" ("$hmm")"
+
+~/bin/RpsbProc-x64-linux/rpsblast -query  $hmm.scan.dedup.protein.fa -out $hmm.scan.dedup.protein.rpsblast.out -evalue 0.01 -outfmt 6 -db /home/sean/bin/RpsbProc-x64-linux/db/Pfam -num_threads 4
+
+awk '!a[$1$2]++' $hmm.scan.dedup.protein.rpsblast.out |  grep "CDD:"$CDD"" | cut -f1 > $hmm.scan.dedup.protein.rpsblast.confirm.txt
+
+sed 's/|.*//' $hmm.scan.dedup.protein.rpsblast.confirm.txt | awk '{A[$1]++}END{for(i in A)print i,A[i]}' > $hmm.scan.dedup.protein.rpsblast.confirm.count
+
+echo `date` "done rpsblast "$name" ("$hmm")"
+
+
+cd ../
+
+
+done
+
+#02_run_batch.mafft_tree.sh
+
+cat pfam_CDD_name.list | while read pfam CDD name; do 
+
+PF_pref="$( echo "$pfam" | sed 's/pfam/PF/' )" &&  hmm="$(grep "$PF_pref" ~/bin/hmmer-3.3.1/Pfam_seed/Pfam-A.hmm | sed 's/ACC.*PF/PF/')"  && seqtk subseq ${name}/$hmm.scan.dedup.protein.fa ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.txt > ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.fa && mafft --genafpair --maxiterate 1000 --ep 0 --quiet  ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.fa > ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.fa && echo `date` "==> Done mafft: "$hmm" <==" && ~/bin/FastTree -gamma -quote  ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.fa >  ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.tre && sed "s/'//g" ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.tre > ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.dequote.tre && Rscript ladderize_tree.R -i ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.dequote.tre -o ${name}/$hmm.scan.dedup.protein.rpsblast.confirm.protein.align.dequote.vis & 
+
+done
+
+#ladderize_tree.R
+##Rscript .R -i input.noquote.newick.tre -o output_prefix 
+
+suppressPackageStartupMessages(library(ape))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(tidytree))
+suppressPackageStartupMessages(library(phylotools))
+suppressPackageStartupMessages(library(phangorn))
+suppressPackageStartupMessages(library(treeio))
+suppressPackageStartupMessages(library(ggtree))
+suppressPackageStartupMessages(library(flextable))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(ggplotify))
+suppressPackageStartupMessages(library(eoffice))
+suppressPackageStartupMessages(library(optparse))
+
+option_list <- list(
+  make_option(c("-i","--input"), type="character", default=NULL,
+              help="inputTree file' [default %default]",
+              dest="inputTree"),
+  make_option(c("-o","--output"), type="character", default="output_ggtree",
+              help="output file prefix' [default %default]",
+              dest="outputPrefix"),
+  make_option(c("-v", "--verbose"), action="store_true", default=TRUE,
+              help="Print out all parameter settings [default]")
+)  
+
+options(error=traceback)
+
+parser <- OptionParser(usage = "%prog -i input.noquote.tre -o out.prefix [options]",option_list=option_list)
+opt = parse_args(parser)
+
+
+mytree <- read.tree(opt$inputTree)
+
+
+  out_tree <- ladderize(mytree)
+  write.tree(out_tree,file=paste0(opt$outputPrefix,".ladderized.tree.nwk"))
+
+#1.6.3 dup_gene_finder
+##Prepare the input files (longest-transcript protein files and gff files) according to https://github.com/qiao-xin/DupGen_finder, and compare each two species as below
+
+num_threads="10"
+id1="Species1" ##Species1
+id2="Species2"  ##Species2
+db_name="$(echo ""$id1"_"$id2"")"
+
+cat $id1.fa $id2.fa > ${id1}_${id2}.fa 
+cat $id1.gff $id2.gff > ${id1}_${id2}.gff
+prot="$(echo ""$id1"_"$id2".fa")"
+
+diamond makedb --in $prot -d $db_name
+
+diamond blastp -d $db_name --query $prot --evalue  1e-10 --outfmt 6 --threads $num_threads -o $db_name.blast.out.txt
+
+
+grep ""$id1"|.*"$id1"|" $db_name.blast.out.txt > ${id1}.blast
+grep ""$id2"|.*"$id2"|" $db_name.blast.out.txt > ${id2}.blast
+
+grep ""$id1"|.*"$id2"|\|"$id2"|.*"$id1"|" $db_name.blast.out.txt > $db_name.blast
+
+ln -s ${id1}_${id2}.gff ${id2}_${id1}.gff 
+ln -s $db_name.blast ${id2}_${id1}.blast
+
+
+###Dupgenefinder
+~/bin/DupGen_finder/DupGen_finder-unique.pl -i ./ -t $id1 -c $id2 -o DupGenFinder_${id1}_${id2}_result
+~/bin/DupGen_finder/DupGen_finder-unique.pl -i ./ -t $id2 -c $id1 -o DupGenFinder_${id2}_${id1}_result
+
+##Parse collinearity pairs
+cat DupGenFinder_${id1}_${id2}_result/${id1}_${id2}.collinearity | grep -v '#' | sed 's/.*:\s\{1,\}//' | sed 's/\s\{1,\}[0-9e-]\{1,\}//' > ${id1}_${id2}.collinearity.pairs.txt
+
+cat DupGenFinder_${id1}_${id2}_result/${id1}.collinearity | grep -v '#' | sed 's/.*:\s\{1,\}//' | sed 's/\s\{1,\}[0-9e-]\{1,\}//' > ${id1}.collinearity.pairs.txt
+
+cat DupGenFinder_${id2}_${id1}_result/${id2}.collinearity | grep -v '#' | sed 's/.*:\s\{1,\}//' | sed 's/\s\{1,\}[0-9e-]\{1,\}//' > ${id2}.collinearity.pairs.txt
+
+##done
