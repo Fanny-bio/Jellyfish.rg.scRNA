@@ -1,0 +1,395 @@
+#1.1.1 Single cell analysis process of Aurelia
+library(Seurat)
+library(cowplot)
+library(dplyr)
+library(ggraph)
+library(ggplot2)
+library(clustree)
+library(metap)
+sessionInfo()
+#input data
+AAU0.data <- Read10X(data.dir = ".../count_AAU_0h/outs/filtered_feature_bc_matrix")
+AAU6.data <- Read10X(data.dir = ".../count_AAU_6h/outs/filtered_feature_bc_matrix")
+AAU12.data <- Read10X(data.dir = ".../count_AAU_12h/outs/filtered_feature_bc_matrix")
+AAU18.data <- Read10X(data.dir = ".../count_AAU_18h/outs/filtered_feature_bc_matrix")
+AAU24.data <- Read10X(data.dir = ".../count_AAU_24h/outs/filtered_feature_bc_matrix")
+AAU0 <- CreateSeuratObject(counts = AAU0.data, project = "AAU0", min.cells = 3, min.features = 200)
+AAU6 <- CreateSeuratObject(counts = AAU6.data, project = "AAU6", min.cells = 3, min.features = 200)
+AAU12 <- CreateSeuratObject(counts = AAU12.data, project = "AAU12", min.cells = 3, min.features = 200)
+AAU18 <- CreateSeuratObject(counts = AAU18.data, project = "AAU18", min.cells = 3, min.features = 200)
+AAU24 <- CreateSeuratObject(counts = AAU24.data, project = "AAU24", min.cells = 3, min.features = 200)
+
+#cell QC
+AAU0[["percent.mt"]] <- PercentageFeatureSet(AAU0, pattern = "^MT")
+AAU6[["percent.mt"]] <- PercentageFeatureSet(AAU6, pattern = "^MT")
+AAU12[["percent.mt"]] <- PercentageFeatureSet(AAU12, pattern = "^MT")
+AAU18[["percent.mt"]] <- PercentageFeatureSet(AAU18, pattern = "^MT")
+AAU24[["percent.mt"]] <- PercentageFeatureSet(AAU24, pattern = "^MT")
+VlnPlot(AAU0, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(AAU6, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(AAU12, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(AAU18, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(AAU24, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+AAU0.QC <- AAU0
+AAU0.QC <- subset(AAU0.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+AAU6.QC <- AAU6
+AAU6.QC <- subset(AAU6.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+AAU12.QC <- AAU12
+AAU12.QC <- subset(AAU12.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+AAU18.QC <- AAU18
+AAU18.QC <- subset(AAU18.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+AAU24.QC <- AAU24
+AAU24.QC <- subset(AAU24.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+
+AAU0.QC$stim <- "0h"
+AAU6.QC$stim <- "6h"
+AAU12.QC$stim <- "12h"
+AAU18.QC$stim <- "18h"
+AAU24.QC$stim <- "24h"
+
+#normalization
+AAU0.ND <- NormalizeData(AAU0.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+AAU0.FVF <- FindVariableFeatures(AAU0.ND, selection.method = "vst", nfeatures = 3000)
+AAU6.ND <- NormalizeData(AAU6.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+AAU6.FVF <- FindVariableFeatures(AAU6.ND, selection.method = "vst", nfeatures = 3000)
+AAU12.ND <- NormalizeData(AAU12.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+AAU12.FVF <- FindVariableFeatures(AAU12.ND, selection.method = "vst", nfeatures = 3000)
+AAU18.ND <- NormalizeData(AAU18.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+AAU18.FVF <- FindVariableFeatures(AAU18.ND, selection.method = "vst", nfeatures = 3000)
+AAU24.ND <- NormalizeData(AAU24.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+AAU24.FVF <- FindVariableFeatures(AAU24.ND, selection.method = "vst", nfeatures = 3000)
+
+#Perform integration
+features <- SelectIntegrationFeatures(object.list = list(AAU0.FVF,AAU6.FVF,AAU12.FVF,AAU18.FVF,AAU24.FVF))
+regeneration.anchors <- FindIntegrationAnchors(object.list = list(AAU0.FVF,AAU6.FVF,AAU12.FVF,AAU18.FVF,AAU24.FVF),anchor.features = features)
+regeneration.combined <- IntegrateData(anchorset = regeneration.anchors)
+
+DefaultAssay(regeneration.combined) <- "integrated"
+regeneration.combined <- ScaleData(regeneration.combined)
+regeneration.combined_PCA <- RunPCA(regeneration.combined)
+
+# Determine percent of variation associated with each PC
+pct <- regeneration.combined_PCA[["pca"]]@stdev / sum( regeneration.combined_PCA[["pca"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# last point where change of % of variation is more than 0.1%.
+co2
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+bestpc=1:pcs
+#dim=1:18
+
+#t-SNE and Clustering
+regeneration.combined_RP <- RunUMAP(regeneration.combined_PCA, reduction = "pca", dims = 1:18)
+regeneration.combined_FNRP <- FindNeighbors(regeneration.combined_RP, reduction = "pca", dims = 1:18)
+#find resolution
+regeneration.combined_FCRP <- FindClusters(object = regeneration.combined_FNRP,  resolution = c(seq(.0,1,.1)))
+clustree(regeneration.combined_FCRP@meta.data, prefix = "integrated_snn_res.")
+#select resolution=0.1
+rm(AAU0, AAU6, AAU12, AAU18, AAU24)
+rm(AAU0.QC, AAU6.QC, AAU12.QC, AAU18.QC, AAU24.QC)
+rm(AAU0.FVF, AAU6.FVF, AAU12.FVF, AAU18.FVF, AAU24.FVF)
+rm(AAU0.ND, AAU6.ND, AAU12.ND, AAU18.ND, AAU24.ND)
+rm(regeneration.anchors, regeneration.combined, regeneration.combined_FCRP)
+regeneration.combined_FCRPB <- FindClusters(object = regeneration.combined_FNRP, resolution = 0.1)
+
+save.image("Male.Moon.mt5.cr_v7.1.0.dim18.vst.AfterFindClusters.RData")
+
+options(repr.plot.width = 18, repr.plot.height = 7, repr.plot.res = 300)
+DimPlot(regeneration.combined_FCRPB, group.by = c("stim", "seurat_clusters"), ncol = 2)
+#see prportion
+table(regeneration.combined_FCRPB@meta.data$seurat_clusters, regeneration.combined_FCRPB@meta.data$orig.ident)
+
+#findallmarker
+DefaultAssay(regeneration.combined_FCRPB) <- "RNA"
+allmarker.regeneration.response <- FindAllMarkers(regeneration.combined_FCRPB, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+library(dplyr)
+library(tidyr)
+eggnog<-read.delim(".../Jellyfish_Aurelia_emapper.annotations",
+                  header = FALSE, skip = 5)
+eggnog <- unite(eggnog, "V8_V9", V8, V9, sep = ",", remove = FALSE)
+eggnog <- separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+eggnog.names <- eggnog[,c(2,10)]
+names(eggnog.names)[2]="Gene.name"
+head(eggnog.names)
+allmarker.regeneration.response
+nrow(allmarker.regeneration.response)
+allmarker.regeneration.response.name <- allmarker.regeneration.response
+allmarker.regeneration.response.name$Genes <- gsub("-", "_", allmarker.regeneration.response.name$gene)
+allmarker.regeneration.response.name$id <- row.names(allmarker.regeneration.response.name)
+allmarker.regeneration.response.name
+nrow(allmarker.regeneration.response.name)
+allmarker.regeneration.response.name <- merge(allmarker.regeneration.response.name, eggnog.names,
+                                                     by = "Genes", all.x = TRUE)
+allmarker.regeneration.response.name
+nrow(allmarker.regeneration.response.name)
+allmarker.regeneration.response.name <- allmarker.regeneration.response.name[order(allmarker.regeneration.response.name$cluster),
+                                                                                               c("id","Genes","Gene.name","cluster","gene",
+                                                       "p_val","avg_log2FC",
+                                                       "pct.1","pct.2", 
+                                                       "p_val_adj")]
+write.table(allmarker.regeneration.response.name,
+            file = "findallmarker.Moon.withname.txt", 
+            sep = "\t", quote = FALSE,
+            row.names = FALSE)
+
+top20 <- allmarker.regeneration.response %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+DefaultAssay(regeneration.combined_FCRPB) <- "integrated"
+DoHeatmap(regeneration.combined_FCRPB, features = top20$gene, label = F)
+
+#Findmarkers-DEG
+DefaultAssay(regeneration.combined_FCRPB) <- "RNA"
+regeneration.combined_FCRPB$celltype.stim <- paste(Idents(regeneration.combined_FCRPB), regeneration.combined_FCRPB$stim, sep = "_")
+regeneration.combined_FCRPB$celltype <- Idents(regeneration.combined_FCRPB)
+unique(regeneration.combined_FCRPB$celltype)
+Idents(regeneration.combined_FCRPB) <- "celltype.stim"
+#count cell numbers of each cluster, when run Findmarkers(), cell number should > 3.
+unique(Idents(regeneration.combined_FCRPB))
+cellidents <- as.data.frame(Idents(regeneration.combined_FCRPB))
+head(cellidents)
+xtabs(~.,cellidents)
+#create matrix
+regeneration.stim <- matrix(data = NA, ncol = 7, 
+                                dimnames = list(c(1),c("Genes","p_val","avg_log2FC","pct.1","pct.2","p_val_adj","cell.type")))
+regeneration.stim
+celltypenumber<-sort(unique(regeneration.combined_FCRPB$celltype))
+celltypenumber
+treattime<-c("0h","6h","12h","18h","24h")
+treattime
+
+regeneration.stim.wide<-read.delim("Moon.id.fa", header = FALSE)
+names(regeneration.stim.wide)[1]="Genes"
+regeneration.stim.wide$Genes<-gsub("_","-",regeneration.stim.wide$Genes)
+regeneration.stim.wide.blank<-regeneration.stim.wide
+regeneration.stim.blank <- matrix(data = NA, ncol = 7, 
+                                dimnames = list(c(1),c("Genes","p_val","avg_log2FC","pct.1","pct.2","p_val_adj","cell.type")))
+regeneration.stim.blank<-as.data.frame(regeneration.stim.blank)
+regeneration.stim.long<-regeneration.stim.blank
+regeneration.stim.long$treatment<-NA
+
+for (i in 1:length(celltypenumber)){
+            celltypesub<-celltypenumber[i]
+    regeneration.stim <- regeneration.stim.blank
+    regeneration.stim.wide<-regeneration.stim.wide.blank
+    for (j in 1:(length(treattime)-1)){
+         for (k in (j+1):length(treattime)){
+         treattime1<-treattime[j]
+        treattime2<-treattime[k]
+        regeneration.stim.sub <- FindMarkers(regeneration.combined_FCRPB,
+                                             ident.1 = paste(celltypesub, treattime2, sep = "_"),
+                                             ident.2 = paste(celltypesub, treattime1, sep = "_"),
+                                             verbose = FALSE)
+    regeneration.stim.sub$Genes <- rownames(regeneration.stim.sub)
+    rownames(regeneration.stim.sub) <- c()
+    regeneration.stim.sub$cell.type <- paste("cell_cluster",celltypesub, sep = "_")
+    
+    regeneration.stim<-regeneration.stim.sub
+    regeneration.stim$treatment<-paste0(treattime2, "VS", treattime1)
+    regeneration.stim.long<-rbind(regeneration.stim.long,regeneration.stim)
+    
+write.table(regeneration.stim.long, 
+            file = "Male.Moon.rg.stim.findmarker.txt", 
+            sep = "\t",
+            row.names = FALSE)
+
+
+#1.1.2 Single cell analysis process of Rhopilema
+library(Seurat)
+library(dplyr)
+library(ggraph)
+library(ggplot2)
+library(cowplot)
+library(clustree)
+library(metap)
+sessionInfo()
+
+RESJ0a.data <- Read10X(data.dir = ".../count_eJ0a/outs/filtered_feature_bc_matrix")
+RESJ6a.data <- Read10X(data.dir = ".../count_eJ6a/outs/filtered_feature_bc_matrix")
+RESJ12a.data <- Read10X(data.dir = ".../count_eJ12RNA/outs/filtered_feature_bc_matrix")
+RESJ18a.data <- Read10X(data.dir = ".../count_eJ18RNA/outs/filtered_feature_bc_matrix")
+RESJ24a.data <- Read10X(data.dir = ".../count_eJ24RNA/outs/filtered_feature_bc_matrix")
+
+RESJ0a <- CreateSeuratObject(counts = RESJ0a.data, project = "RESJ0a", min.cells = 3, min.features = 200)
+RESJ6a <- CreateSeuratObject(counts = RESJ6a.data, project = "RESJ6a", min.cells = 3, min.features = 200)
+RESJ12a <- CreateSeuratObject(counts = RESJ12a.data, project = "RESJ12a", min.cells = 3, min.features = 200)
+RESJ18a <- CreateSeuratObject(counts = RESJ18a.data, project = "RESJ18a", min.cells = 3, min.features = 200)
+RESJ24a <- CreateSeuratObject(counts = RESJ24a.data, project = "RESJ24a", min.cells = 3, min.features = 200)
+
+RESJ0a[["percent.mt"]] <- PercentageFeatureSet(RESJ0a, pattern = "^MT")
+RESJ6a[["percent.mt"]] <- PercentageFeatureSet(RESJ6a, pattern = "^MT")
+RESJ12a[["percent.mt"]] <- PercentageFeatureSet(RESJ12a, pattern = "^MT")
+RESJ18a[["percent.mt"]] <- PercentageFeatureSet(RESJ18a, pattern = "^MT")
+RESJ24a[["percent.mt"]] <- PercentageFeatureSet(RESJ24a, pattern = "^MT")
+VlnPlot(RESJ0a, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(RESJ6a, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(RESJ12a, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(RESJ18a, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(RESJ24a, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+RESJ0a.QC <- RESJ0a
+RESJ0a.QC <- subset(RESJ0a.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+RESJ6a.QC <- RESJ6a
+RESJ6a.QC <- subset(RESJ6a.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+RESJ12a.QC <- RESJ12a
+RESJ12a.QC <- subset(RESJ12a.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+RESJ18a.QC <- RESJ18a
+RESJ18a.QC <- subset(RESJ18a.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+RESJ24a.QC <- RESJ24a
+RESJ24a.QC <- subset(RESJ24a.QC, subset = nCount_RNA<50000 & nCount_RNA>100 & percent.mt < 5)
+
+RESJ0a.QC$stim <- "0h"
+RESJ6a.QC$stim <- "6h"
+RESJ12a.QC$stim <- "12h"
+RESJ18a.QC$stim <- "18h"
+RESJ24a.QC$stim <- "24h"
+
+#normalization
+RESJ0a_ND <- NormalizeData(RESJ0a.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+RESJ0a_FVF <- FindVariableFeatures(RESJ0a_ND, selection.method = "vst", nfeatures = 3000)
+RESJ6a_ND <- NormalizeData(RESJ6a.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+RESJ6a_FVF <- FindVariableFeatures(RESJ6a_ND, selection.method = "vst", nfeatures = 3000)
+RESJ12a_ND <- NormalizeData(RESJ12a.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+RESJ12a_FVF <- FindVariableFeatures(RESJ12a_ND, selection.method = "vst", nfeatures = 3000)
+RESJ18a_ND <- NormalizeData(RESJ18a.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+RESJ18a_FVF <- FindVariableFeatures(RESJ18a_ND, selection.method = "vst", nfeatures = 3000)
+RESJ24a_ND <- NormalizeData(RESJ24a.QC, normalization.method = "LogNormalize", scale.factor = 10000)
+RESJ24a_FVF <- FindVariableFeatures(RESJ24a_ND, selection.method = "vst", nfeatures = 3000)
+
+# Perform integration
+features <- SelectIntegrationFeatures(object.list = list(RESJ0a_FVF, RESJ6a_FVF, RESJ12a_FVF, RESJ18a_FVF,RESJ24a_FVF))
+regeneration.anchors <- FindIntegrationAnchors(object.list = list(RESJ0a_FVF, RESJ6a_FVF, RESJ12a_FVF, RESJ18a_FVF,RESJ24a_FVF),anchor.features = features)
+regeneration.combined <- IntegrateData(anchorset = regeneration.anchors)
+
+DefaultAssay(regeneration.combined) <- "integrated"
+regeneration.combined <- ScaleData(regeneration.combined)
+regeneration.combined_PCA <- RunPCA(regeneration.combined)
+
+# Determine percent of variation associated with each PC
+pct <- regeneration.combined_PCA[["pca"]]@stdev / sum( regeneration.combined_PCA[["pca"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# last point where change of % of variation is more than 0.1%.
+co2
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+bestpc=1:pcs
+#dim=1:21
+
+#t-SNE and Clustering
+regeneration.combined_RP <- RunUMAP(regeneration.combined_PCA, reduction = "pca", dims = 1:21)
+regeneration.combined_FNRP <- FindNeighbors(regeneration.combined_RP, reduction = "pca", dims = 1:21)
+
+#broad cell type res0.2
+regeneration.combined_FCRPB <- FindClusters(object = regeneration.combined_FNRP, resolution = 0.2)
+
+save.image("Edible.mt5.cr_v7.1.0.Seuratv4.4.0.dim21.vst.AfterFindClusters.RData")
+options(repr.plot.width = 18, repr.plot.height = 7, repr.plot.res = 300)
+regeneration.combined_FCRPB$stim<-factor(regeneration.combined_FCRPB$stim, levels = c("0h","6h","12h","18h","24h"))
+p1 <- DimPlot(regeneration.combined_FCRPB, reduction = "umap", group.by = "stim")
+p2 <- DimPlot(regeneration.combined_FCRPB, reduction = "umap", label = TRUE)
+plot_grid(p1, p2)
+# see prportion
+table(regeneration.combined_FCRPB@meta.data$seurat_clusters, regeneration.combined_FCRPB@meta.data$orig.ident)
+
+#findallmarker
+DefaultAssay(regeneration.combined_FCRPB) <- "RNA"
+allmarker.regeneration.response <- FindAllMarkers(regeneration.combined_FCRPB, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+library(dplyr)
+library(tidyr)
+eggnog<-read.delim(".../Jellyfish_edible_hic.proteins.33208.eggnog.emapper.annotations.xls",
+                  header = FALSE, skip = 5)
+eggnog <- unite(eggnog, "V8_V9", V8, V9, sep = ",", remove = FALSE)
+eggnog <- separate(eggnog, V1, c("Genes", "Transcript"), sep = "-", remove = FALSE)
+eggnog.names <- eggnog[,c(2,10)]
+names(eggnog.names)[2]="Gene.name"
+head(eggnog.names)
+allmarker.regeneration.response
+nrow(allmarker.regeneration.response)
+allmarker.regeneration.response.name <- allmarker.regeneration.response
+allmarker.regeneration.response.name$Genes <- gsub("-", "_", allmarker.regeneration.response.name$gene)
+allmarker.regeneration.response.name$id <- row.names(allmarker.regeneration.response.name)
+allmarker.regeneration.response.name
+nrow(allmarker.regeneration.response.name)
+allmarker.regeneration.response.name <- merge(allmarker.regeneration.response.name, eggnog.names,
+                                                     by = "Genes", all.x = TRUE)
+allmarker.regeneration.response.name
+nrow(allmarker.regeneration.response)
+allmarker.regeneration.response.name <- allmarker.regeneration.response.name[order(allmarker.regeneration.response.name$cluster),
+                                                                                               c("id","Genes","Gene.name","cluster","gene",
+                                                       "p_val","avg_log2FC",
+                                                       "pct.1","pct.2", 
+                                                       "p_val_adj")]
+write.table(allmarker.regeneration.response.name,
+            file = "findallmarker.Edible.withname.txt", 
+            sep = "\t", quote = FALSE,
+            row.names = FALSE)
+top20 <- allmarker.regeneration.response %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+efaultAssay(regeneration.combined_FCRPB) <- "integrated"
+DoHeatmap(regeneration.combined_FCRPB, features = top20$gene, label = F)
+
+#Findmarkers
+DefaultAssay(regeneration.combined_FCRPB) <- "RNA"
+regeneration.combined_FCRPB$celltype.stim <- paste(Idents(regeneration.combined_FCRPB), regeneration.combined_FCRPB$stim, sep = "_")
+regeneration.combined_FCRPB$celltype <- Idents(regeneration.combined_FCRPB)
+unique(regeneration.combined_FCRPB$celltype)
+Idents(regeneration.combined_FCRPB) <- "celltype.stim"
+unique(Idents(regeneration.combined_FCRPB))
+cellidents <- as.data.frame(Idents(regeneration.combined_FCRPB))
+head(cellidents)
+xtabs(~.,cellidents)
+#create matrix
+regeneration.stim <- matrix(data = NA, ncol = 7, 
+                                dimnames = list(c(1),c("Genes","p_val","avg_log2FC","pct.1","pct.2","p_val_adj","cell.type")))
+regeneration.stim
+celltypenumber<-sort(unique(regeneration.combined_FCRPB$celltype))
+treattime<-c("0h","6h","12h","18h","24h")
+treattime
+
+regeneration.stim.wide<-read.delim(".../Edible.id.fa", header = FALSE)
+names(regeneration.stim.wide)[1]="Genes"
+regeneration.stim.wide$Genes<-gsub("_","-",regeneration.stim.wide$Genes)
+regeneration.stim.wide.blank<-regeneration.stim.wide
+regeneration.stim.blank <- matrix(data = NA, ncol = 7, 
+                                dimnames = list(c(1),c("Genes","p_val","avg_log2FC","pct.1","pct.2","p_val_adj","cell.type")))
+regeneration.stim.blank<-as.data.frame(regeneration.stim.blank)
+regeneration.stim.long<-regeneration.stim.blank
+regeneration.stim.long$treatment<-NA
+
+for (i in 1:length(celltypenumber)){
+            celltypesub<-celltypenumber[i]
+    regeneration.stim <- regeneration.stim.blank
+    regeneration.stim.wide<-regeneration.stim.wide.blank
+    for (j in 1:(length(treattime)-1)){
+         for (k in (j+1):length(treattime)){
+         treattime1<-treattime[j]
+        treattime2<-treattime[k]
+        regeneration.stim.sub <- FindMarkers(regeneration.combined_FCRPB,
+                                             ident.1 = paste(celltypesub, treattime2, sep = "_"),
+                                             ident.2 = paste(celltypesub, treattime1, sep = "_"),
+                                             verbose = FALSE)
+    regeneration.stim.sub$Genes <- rownames(regeneration.stim.sub)
+    rownames(regeneration.stim.sub) <- c()
+    regeneration.stim.sub$cell.type <- paste("cell_cluster",celltypesub, sep = "_")
+    
+    regeneration.stim<-regeneration.stim.sub
+    regeneration.stim$treatment<-paste0(treattime2, "VS", treattime1)
+    regeneration.stim.long<-rbind(regeneration.stim.long,regeneration.stim)
+
+write.table(regeneration.stim.long, 
+            file = ".../Edible.rg.stim.findmarker.txt", 
+            sep = "\t",
+            row.names = FALSE)
