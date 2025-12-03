@@ -1,0 +1,122 @@
+library(monocle3)
+library(Seurat)
+library(patchwork)
+library(dplyr)
+library(ggraph)
+library(ggplot2)
+library(cowplot)
+library(sf)
+library(ggrepel)
+
+setwd(".../Seurat_monocle")
+#for Rophilema
+load(".../Seurat_monocle/Edible.mt5.cr_v7.1.0.Seuratv4.4.0.dim21.vst.AfterFindClusters.RData")
+#for Aurelia
+load(".../Seurat_monocle/Male.Moon.mt5.cr_v7.1.0.dim18.vst.AfterFindClusters.RData")
+
+data <- GetAssayData(regeneration.combined_FCRPB, 
+                     assay = 'RNA', slot = 'counts')
+cell_metadata <- regeneration.combined_FCRPB@meta.data
+gene_annotation <- data.frame(gene_short_name = rownames(data))
+rownames(gene_annotation) <- rownames(data)
+
+##Create CDS objects and preprocess data
+cds <- new_cell_data_set(data,
+                         cell_metadata = cell_metadata,
+                         gene_metadata = gene_annotation)
+
+cds <- preprocess_cds(cds)
+plot_pc_variance_explained(cds)
+cds <- align_cds(cds, alignment_group = "stim")
+cds <- reduce_dimension(cds)
+cds <- cluster_cells(cds)
+
+##Import integrated from seurat
+#replace monocle umap coordinates and clusters with seurat
+cds@int_colData$reducedDims$UMAP <- Embeddings(seurat_neuronall, "umap")
+cds@clusters$UMAP$clusters <- seurat_neuronall$seurat_clusters
+names(cds@clusters$UMAP$clusters) <- rownames(seurat_neuronall@meta.data)
+reducedDims(cds)$UMAP <- seurat_neuronall@reductions$umap@cell.embeddings
+
+cds <- learn_graph(cds, use_partition=FALSE, close_loop=FALSE)
+
+p1 <- plot_cells(cds, color_cells_by = "seurat_clusters",
+           group_label_size=1, 
+           graph_label_size=1,
+           label_groups_by_cluster = FALSE, 
+           label_principal_points=TRUE, 
+           label_leaves = FALSE, 
+           label_branch_points = FALSE)
+p2 <- plot_cells(cds,
+           color_cells_by = "stim",
+           label_cell_groups=FALSE,
+           label_leaves=TRUE,
+           label_branch_points=TRUE,
+           graph_label_size=1.5)
+p = p1|p2
+p
+#use stem cells as root to order the cells
+#For Rhopelima
+cds <- order_cells(cds, root_cells = colnames(cds[,colData(cds)$stim=="0h" & clusters(cds) == 11]))
+#For Aurelia
+cds <- order_cells(cds, root_cells = colnames(cds[,colData(cds)$stim=="0h" & clusters(cds) == 4]))
+
+p <- plot_cells(cds,
+                color_cells_by = "pseudotime",
+                group_cells_by = "cluster",
+                label_cell_groups = FALSE,
+                label_groups_by_cluster=FALSE,
+                label_leaves=FALSE,
+                label_branch_points=FALSE,
+                label_roots = FALSE,
+                graph_label_size=1.5)
+p
+ggsave("pseudotime.png", plot=p, width=5, height=4.5)
+
+#Plot
+#For Rhopelima
+custom_order <- c("3","5","2","7","8","1","4","6","9","10","11","0")
+custom_colors <- c(
+  "3"  = "#FF99CC",#"3"="Epidermis_1",
+  "5"  = "#FF99CC",#"5"="Epidermis_2",
+  "2"  = "#FFCCFF",#"2"="Gastrodermis",
+  "7"  = "#61CBF4",#"7"="Neural_cell_1",
+  "8"  = "#61CBF4",#"8"="Neural_cell_2",
+  "1"  = "#D9D9D9",#"1"="Potential_neural_cell1",
+  "4"  = "#D9D9D9",#"4"="Potential_neural_cell2",
+  "6"  = "#8ED973",#"6"="Cnidocyte",
+  "9"  = "#FF9966",#"9"="Gland_cell_1",
+  "10" = "#FF9966",#"10"="Gland_cell_2",
+  "11" = "#C67BFF",#"11"="Stem_cell"
+  "0"  = "#D9D9D9"#"0"= "UN",
+
+#For Aurelia
+#ordered according to tissues
+custom_order <- c("0","11","1","7","5","6","2","3","8","9","10","4")
+####group color by tissues
+custom_colors <- c("0" = "#FF99CC", #"Epidermis_1",
+                   "11" = "#FF99CC", #"Epidermis_2",
+                   "1" = "#FFCCFF",#"Gastrodermis",
+                   "7" = "#D9D9D9", #"Potential gastrodermis",
+                   "5" = "#61CBF4",#"Neural_cell_1",
+                   "6" = "#61CBF4",#"Neural_cell_2",
+                   "2" = "#D9D9D9",#"Potential_neural_cell",
+                   "3" = "#8ED973", #"Cnidocyte_1",
+                   "8" = "#8ED973", #"Cnidocyte_2",
+                   "9" = "#8ED973", #"Cnidocyte_3",
+                   "10" = "#FF9966", #"Gland_cell",
+                   "4" = "#C67BFF") #"Stem_cell"
+
+data.pseudo$seurat_clusters <- factor(data.pseudo$seurat_clusters, levels = custom_order)
+p <- ggplot(data.pseudo, 
+            aes(monocle3_pseudotime, 
+                seurat_clusters, 
+                fill = seurat_clusters))+
+  geom_boxplot()+
+  scale_fill_manual(values = custom_colors)+
+  theme_bw()+  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        #panel.border = element_blank())
+p
+ggsave("Ordered.celltype.pseudotime.boxplot.png", plot=p, width=6, height=8)
